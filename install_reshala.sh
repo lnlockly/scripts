@@ -1,23 +1,17 @@
 #!/bin/bash
 # ============================================================ #
-# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.994 - FULL FAT FIX       ==
-# ============================================================ #
-# ==    1. Логика логов возвращена к версии v1.92 (Форсаж). ==
-# ==    2. Исправлено отображение журнала.                  ==
-# ==    3. Оставлен функционал обновлений системы.          ==
-# ==    4. Добавлено меню очистки Docker.                   ==
-# ==    5. Улучшено определение версий и типа сервера.      ==
-# ==    6. ИСПРАВЛЕНО: Ложное определение Панели при Ноде.  ==
-# ==    7. ИСПРАВЛЕНО: Двойные 'v' в версиях.               ==
-# ==    8. ВОЗВРАЩЕНЫ ВСЕ ОПИСАНИЯ И КОММЕНТАРИИ.           ==
+# ==      ИНСТРУМЕНТ «РЕШАЛА» v1.995 - СКОРО БУДЕТ ЖАРИШКА    ==
 # ============================================================ #
 set -uo pipefail
 
 # ============================================================ #
 #                  КОНСТАНТЫ И ПЕРЕМЕННЫЕ                      #
 # ============================================================ #
-readonly VERSION="v1.994"
-readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/main/install_reshala.sh"
+readonly VERSION="v1.995"
+# Убедись, что ветка (dev/main) правильная!
+readonly REPO_BRANCH="main" 
+readonly SCRIPT_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/install_reshala.sh"
+readonly MODULES_URL="https://raw.githubusercontent.com/DonMatteoVPN/reshala-script/refs/heads/${REPO_BRANCH}/modules"
 CONFIG_FILE="${HOME}/.reshala_config"
 LOGFILE="/var/log/reshala.log"
 INSTALL_PATH="/usr/local/bin/reshala"
@@ -30,6 +24,7 @@ C_YELLOW='\033[1;33m'
 C_CYAN='\033[0;36m'
 C_BOLD='\033[1m'
 C_GRAY='\033[0;90m'
+C_WHITE='\033[1;37m'
 
 # --- Глобальные переменные состояния ---
 SERVER_TYPE="Чистый сервак"
@@ -47,6 +42,28 @@ UPDATE_CHECK_STATUS="OK"
 # ============================================================ #
 #                     УТИЛИТАРНЫЕ ФУНКЦИИ                      #
 # ============================================================ #
+
+run_module() {
+    local module_name="$1"
+    local module_url="${MODULES_URL}/${module_name}"
+    local temp_file="/tmp/${module_name}"
+
+    printf "%b\n" "${C_CYAN}☁️ Загружаю модуль ${module_name} из облака...${C_RESET}"
+    
+    # Скачиваем модуль
+    if curl -s -L --fail "$module_url" -o "$temp_file"; then
+        chmod +x "$temp_file"
+        log "Запуск модуля: $module_name"
+        # Запускаем
+        bash "$temp_file"
+        # Удаляем после выполнения
+        rm -f "$temp_file"
+    else
+        printf "%b\n" "${C_RED}❌ Ошибка загрузки модуля. Проверь интернет или наличие файла в репозитории.${C_RESET}"
+        log "Ошибка загрузки модуля $module_name с $module_url"
+        sleep 2
+    fi
+}
 
 # Запуск команд с sudo, если нужно
 run_cmd() { 
@@ -102,7 +119,206 @@ get_net_status() {
     echo "$cc|$qdisc"
 }
 
-# === НОВЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОПРЕДЕЛЕНИЯ ВЕРСИЙ ===
+# === КАЛЬКУЛЯТОР ВМЕСТИМОСТИ (TRUE REALISTIC EDITION) ===
+calculate_vpn_capacity() {
+    local upload_speed=$1  # В Мбит/с
+    
+    # 1. Ресурсы железа
+    local ram_total; ram_total=$(free -m | grep Mem | awk '{print $2}')
+    local ram_used; ram_used=$(free -m | grep Mem | awk '{print $3}')
+    local cpu_cores; cpu_cores=$(nproc)
+    
+    # Считаем РЕАЛЬНО доступную память.
+    # Оставляем буфер 250МБ системе, чтобы она не задыхалась.
+    local available_ram=$((ram_total - ram_used - 250))
+    if [ "$available_ram" -lt 0 ]; then available_ram=0; fi
+    
+    # 2. Лимит по RAM 
+    # Активная сессия Xray + буферы TCP жрут память.
+    # Берем 4 МБ на юзера (это честный расчет для стабильности).
+    local max_users_ram=$((available_ram / 4))
+    
+    # 3. Лимит по CPU 
+    # У тебя Ryzen 9 — это зверь. Он вывезет дохера.
+    # Считаем 600 юзеров на ядро (шифрование ест проц).
+    local max_users_cpu=$((cpu_cores * 600))
+    
+    # Железный лимит (меньшее из RAM и CPU)
+    local hw_limit=$max_users_ram
+    local hw_reason="RAM"
+    
+    if [ "$max_users_cpu" -lt "$max_users_ram" ]; then 
+        hw_limit=$max_users_cpu
+        hw_reason="CPU"
+    fi
+    
+    # 4. Лимит по КАНАЛУ (Самое важное)
+    if [ -n "$upload_speed" ]; then
+        local clean_speed=${upload_speed%.*}
+        
+        # ЛОГИКА:
+        # Активный юзер (YouTube/Insta/TikTok) потребляет в среднем 1.2 - 1.5 Мбит.
+        # Да, есть оверселлинг, но мы считаем КОМФОРТНЫХ активных юзеров.
+        # Коэффициент 0.8 от скорости (это примерно 1.25 Мбит на юзера).
+        # Пример: 400 Мбит * 0.8 = 320 юзеров.
+        local net_limit=$(awk "BEGIN {printf \"%.0f\", $clean_speed * 0.8}")
+        
+        # ФИНАЛЬНЫЙ ВЕРДИКТ: Кто слабое звено?
+        if [ "$net_limit" -lt "$hw_limit" ]; then
+            # Если канал узкий
+            echo "$net_limit (Упор в Канал)"
+        else
+            # Если канал широкий, упремся в железо (обычно RAM)
+            echo "$hw_limit (Упор в $hw_reason)"
+        fi
+    else
+        # Если теста не было
+        echo "$hw_limit (Лимит $hw_reason)"
+    fi
+}
+
+_ensure_net_tools() {
+    if ! command -v ethtool &>/dev/null; then
+        # Тихая установка ethtool для определения скорости порта
+        run_cmd apt-get update -qq && run_cmd apt-get install -y -qq ethtool >/dev/null 2>&1
+    fi
+}
+
+get_port_speed() {
+    local iface
+    iface=$(ip route | grep default | head -n1 | awk '{print $5}')
+    local speed=""
+    
+    # 1. Пробуем через sysfs
+    if [ -f "/sys/class/net/$iface/speed" ]; then
+        local raw
+        raw=$(cat "/sys/class/net/$iface/speed" 2>/dev/null)
+        # Если скорость > 0, значит она настоящая
+        if [[ "$raw" =~ ^[0-9]+$ ]] && [ "$raw" -gt 0 ]; then
+            speed="${raw}Mbps"
+        fi
+    fi
+    
+    # 2. Пробуем ethtool, если стоит
+    if [ -z "$speed" ] && command -v ethtool &>/dev/null; then
+        speed=$(ethtool "$iface" 2>/dev/null | grep "Speed:" | awk '{print $2}')
+    fi
+    
+    # Если скорость не определена или Unknown - возвращаем пустоту, чтобы не позориться
+    if [[ "$speed" == "" ]] || [[ "$speed" == "Unknown!" ]]; then
+        return
+    fi
+    
+    # Красивый вывод
+    if [ "$speed" == "1000Mbps" ]; then speed="1 Gbps"; fi
+    if [ "$speed" == "10000Mbps" ]; then speed="10 Gbps"; fi
+    if [ "$speed" == "2500Mbps" ]; then speed="2.5 Gbps"; fi
+    
+    echo "$speed"
+}
+
+run_speedtest_moscow() {
+    clear
+    printf "%b\n" "${C_CYAN}🚀 ЗАПУСКАЮ ТЕСТ СКОРОСТИ ДО МОСКВЫ...${C_RESET}"
+    
+    # 1. Удаляем старое говно
+    if command -v speedtest-cli &>/dev/null; then
+        export DEBIAN_FRONTEND=noninteractive
+        run_cmd apt-get remove -y speedtest-cli >/dev/null 2>&1
+    fi
+    
+    # 2. Ставим официальный клиент
+    if ! command -v speedtest &>/dev/null; then
+        echo "   📥 Устанавливаю официальный Speedtest..."
+        if ! command -v curl &>/dev/null; then run_cmd apt-get install -y -qq curl >/dev/null; fi
+        curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | run_cmd bash >/dev/null 2>&1
+        run_cmd apt-get install -y speedtest >/dev/null 2>&1
+    fi
+
+    # 3. Ставим jq для точного парсинга (ХИРУРГ)
+    if ! command -v jq &>/dev/null; then
+        echo "   🔧 Ставлю парсер JSON (jq)..."
+        run_cmd apt-get update -qq >/dev/null 2>&1
+        run_cmd apt-get install -y -qq jq >/dev/null 2>&1
+    fi
+    
+    # === ПРЕДУПРЕЖДЕНИЕ ===
+    echo ""
+    printf "%b\n" "${C_RED}🛑 РУКИ УБРАЛ ОТ КЛАВИАТУРЫ!${C_RESET}"
+    echo "   Ща я буду нагружать канал по полной программе."
+    echo "   Не тыкай кнопки, не дыши, не обновляй порнуху в соседней вкладке."
+    printf "%b\n" "${C_YELLOW}⏳ Жди. Работаю с JSON-данными для точности...${C_RESET}"
+    echo ""
+    # ======================
+
+    local json_output=""
+    local server_id="16976" # Beeline Moscow default
+
+    # Пробуем Билайн в JSON
+    if ! json_output=$(speedtest --accept-license --accept-gdpr --server-id "$server_id" -f json 2>/dev/null); then
+        printf "%b\n" "${C_YELLOW}⚠️  Билайн занят. Ищу любой сервер в Москве...${C_RESET}"
+        local search_id
+        search_id=$(speedtest --accept-license --accept-gdpr -L | grep -i "Moscow" | head -n 1 | awk '{print $1}')
+        
+        if [ -n "$search_id" ]; then
+            json_output=$(speedtest --accept-license --accept-gdpr --server-id "$search_id" -f json 2>/dev/null)
+        else
+            json_output=$(speedtest --accept-license --accept-gdpr -f json 2>/dev/null)
+        fi
+    fi
+
+    # ПАРСИНГ JSON (БЕЗ ОШИБОК)
+    if [ -n "$json_output" ]; then
+        # Извлекаем сырые данные
+        local raw_ping=$(echo "$json_output" | jq -r '.ping.latency')
+        local raw_dl=$(echo "$json_output" | jq -r '.download.bandwidth')
+        local raw_ul=$(echo "$json_output" | jq -r '.upload.bandwidth')
+        local url=$(echo "$json_output" | jq -r '.result.url')
+
+        # Если Ping 0 или null - это баг сервера speedtest.
+        # Пингуем сами 8.8.8.8 как fallback, чтобы не показывать "0.0"
+        if [[ "$raw_ping" == "null" ]] || [[ $(echo "$raw_ping < 0.1" | bc -l 2>/dev/null) -eq 1 ]]; then
+             local fallback_ping
+             fallback_ping=$(ping -c 1 8.8.8.8 | grep 'time=' | awk -F'time=' '{print $2}' | cut -d' ' -f1)
+             raw_ping="$fallback_ping (Google)"
+        else
+             raw_ping="${raw_ping} ms"
+        fi
+
+        # Конвертация Байты -> Мегабиты
+        # (Bytes * 8) / 1000000
+        local dl=$(echo "$raw_dl" | awk '{printf "%.2f", $1 * 8 / 1000000}')
+        local ul=$(echo "$raw_ul" | awk '{printf "%.2f", $1 * 8 / 1000000}')
+
+        echo ""
+        echo "══════════════════════════════════════════════════"
+        printf "   %bPING:%b      %s\n" "${C_GRAY}" "${C_RESET}" "$raw_ping"
+        printf "   %bСКАЧКА:%b    %s Mbit/s\n" "${C_GREEN}" "${C_RESET}" "$dl"
+        printf "   %bОТДАЧА:%b    %s Mbit/s\n" "${C_CYAN}" "${C_RESET}" "$ul"
+        echo "══════════════════════════════════════════════════"
+        echo "   🔗 Линк на результат: $url"
+
+        # СОХРАНЕНИЕ
+        if [[ $(echo "$ul > 1" | awk '{print ($1 > 0)}') -eq 1 ]]; then
+            local clean_ul=$(echo "$ul" | cut -d'.' -f1)
+            save_path "LAST_UPLOAD_SPEED" "$clean_ul"
+            
+            local capacity
+            capacity=$(calculate_vpn_capacity "$ul")
+            
+            echo ""
+            printf "%b💎 ВЕРДИКТ РЕШАЛЫ:%b\n" "${C_BOLD}" "${C_RESET}"
+            echo "   С таким каналом эта нода потянет примерно:"
+            printf "   %b👉 %s активных юзеров%b\n" "${C_GREEN}" "$capacity" "${C_RESET}"
+            echo "   (Результат сохранён для главного меню)"
+        fi
+    else
+        printf "\n%b❌ Ошибка: Speedtest вернул пустоту. Попробуй позже.%b\n" "${C_RED}" "${C_RESET}"
+    fi
+    
+    echo ""
+    wait_for_enter
+}
 
 # Проверяет, относится ли имя контейнера к экосистеме Remnawave
 is_remnawave_container() {
@@ -124,18 +340,28 @@ clean_version() {
     echo "$v" | sed 's/^[vV]//' | tr -d '[:space:]'
 }
 
-# Извлекает версию ноды и Xray из логов
+# Извлекает версию ноды и Xray из логов (FIXED EDITION)
 get_node_version_from_logs() {
     local container="$1"
+    # Читаем последние 10000 строк, чтобы точно найти момент запуска, если логов много
     local logs
-    logs=$(run_cmd docker logs "$container" 2>/dev/null | tail -n 100)
+    logs=$(run_cmd docker logs --tail 10000 "$container" 2>&1)
     
+    # Ищем версию Ноды (обычно "Remnawave Node v1.2.3")
     local node_ver
-    node_ver=$(echo "$logs" | grep -oE 'Remnawave Node v[0-9.]*' | head -n1 | sed 's/Remnawave Node v//')
+    node_ver=$(echo "$logs" | grep -oE "Remnawave Node v[0-9.]+" | tail -n 1 | sed 's/Remnawave Node //')
     
+    # Ищем версию Xray. Варианты бывают разные, ищем гибко.
     local xray_ver
-    xray_ver=$(echo "$logs" | grep -oE 'XRay Core: v[0-9.]*' | head -n1 | sed 's/XRay Core: v//')
+    # Попытка 1: "Xray-core v1.8.24"
+    xray_ver=$(echo "$logs" | grep -oE "Xray-core v[0-9.]+" | tail -n 1 | sed 's/Xray-core //')
     
+    # Попытка 2: Если не нашли, ищем "XRay Core: v1.8.24" (как в некоторых сборках)
+    if [ -z "$xray_ver" ]; then
+        xray_ver=$(echo "$logs" | grep -oE "XRay Core: v[0-9.]+" | tail -n 1 | sed 's/XRay Core: //')
+    fi
+
+    # Формируем красивый вывод
     if [ -n "$node_ver" ]; then
         if [ -n "$xray_ver" ]; then
             echo "${node_ver} (Xray: ${xray_ver})"
@@ -143,7 +369,8 @@ get_node_version_from_logs() {
             echo "${node_ver}"
         fi
     else
-        echo "latest"
+        # Если даже в логах ни хрена нет
+        echo "latest (не нашёл в логах)"
     fi
 }
 
@@ -231,9 +458,123 @@ run_update() {
     printf "${C_GREEN}✅ Готово. Теперь у тебя версия %s. Не благодари.${C_RESET}\n" "$LATEST_VERSION"; echo "   Перезапускаю себя, чтобы мозги встали на место..."; sleep 2; exec "$INSTALL_PATH"
 }
 
-# ============================================================ #
-#                 СБОР ИНФОРМАЦИИ О СИСТЕМЕ                    #
-# ============================================================ #
+# === НОВЫЕ ФУНКЦИИ ДЛЯ DASHBOARD v3.0 (GRAPHIC EDITION) ===
+
+# --- УЛУЧШЕННАЯ ЧИСТКА ИМЕНИ CPU ---
+get_cpu_info_clean() {
+    local model
+    # Берем из /proc/cpuinfo
+    model=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2)
+    
+    # Если пусто, пробуем lscpu
+    if [ -z "$model" ]; then
+        model=$(lscpu | grep "Model name" | head -n 1 | cut -d: -f2)
+    fi
+
+    # Чистка: убираем (R), (TM), частоту (@ 2.40GHz), лишние пробелы
+    # Но ОСТАВЛЯЕМ бренды (Intel, AMD, Ryzen, Xeon)
+    echo "$model" | sed 's/(R)//g; s/(TM)//g; s/ @.*//g; s/CPU//g; s/Processor//g; s/Compute Engine//g' | xargs
+}
+
+# --- УНИВЕРСАЛЬНАЯ РИСОВАЛКА БАРОВ ---
+draw_bar() {
+    local perc=$1
+    local size=10
+    
+    # Защита от дурака (если > 100%)
+    local bar_perc=$perc
+    [ "$bar_perc" -gt 100 ] && bar_perc=100
+    
+    local filled=$(( bar_perc * size / 100 ))
+    local empty=$(( size - filled ))
+    
+    # Цвет: Зеленый < 70% < Желтый < 90% < Красный
+    local color="${C_GREEN}"
+    [ "$perc" -ge 70 ] && color="${C_YELLOW}"
+    [ "$perc" -ge 90 ] && color="${C_RED}"
+    
+    printf "${C_GRAY}["
+    printf "${color}"
+    for ((i=0; i<filled; i++)); do printf "■"; done
+    printf "${C_GRAY}"
+    for ((i=0; i<empty; i++)); do printf "□"; done
+    printf "${C_GRAY}] ${color}%3s%%${C_RESET}" "$perc"
+}
+
+# --- RAM С БАРОМ И ТОЧНЫМИ ЦИФРАМИ ---
+get_ram_visual() {
+    local ram_used; ram_used=$(free -m | grep Mem | awk '{print $3}')
+    local ram_total; ram_total=$(free -m | grep Mem | awk '{print $2}')
+    
+    # Защита от деления на ноль
+    if [ "$ram_total" -eq 0 ]; then echo "N/A"; return; fi
+    
+    local perc=$(( 100 * ram_used / ram_total ))
+    local bar; bar=$(draw_bar "$perc")
+    
+    # Красивые цифры (GB если много, MB если мало)
+    local used_str; local total_str
+    if [ "$ram_total" -gt 1024 ]; then
+        used_str=$(awk "BEGIN {printf \"%.1fG\", $ram_used/1024}")
+        total_str=$(awk "BEGIN {printf \"%.1fG\", $ram_total/1024}")
+    else
+        used_str="${ram_used}M"
+        total_str="${ram_total}M"
+    fi
+    
+    echo "$bar ($used_str / $total_str)"
+}
+
+# --- ДИСК С БАРОМ ---
+get_disk_visual() {
+    local root_device; root_device=$(df / | awk 'NR==2 {print $1}')
+    local main_disk; main_disk=$(lsblk -no pkname "$root_device" 2>/dev/null || basename "$root_device" | sed 's/[0-9]*$//')
+    
+    # Тип диска
+    local disk_type="HDD"
+    if [ -f "/sys/block/$main_disk/queue/rotational" ]; then 
+        if [ "$(cat "/sys/block/$main_disk/queue/rotational")" -eq 0 ]; then disk_type="SSD"; fi
+    elif [[ "$main_disk" == *"nvme"* ]]; then disk_type="SSD"; fi
+
+    # Цифры
+    local used; used=$(df -h / | awk 'NR==2 {print $3}')
+    local total; total=$(df -h / | awk 'NR==2 {print $2}')
+    local perc_str; perc_str=$(df / | awk 'NR==2 {print $5}' | tr -d '%')
+    
+    local bar; bar=$(draw_bar "$perc_str")
+    
+    # Возвращаем: TYPE|STRING  (чтобы разделить в display_header)
+    echo "$disk_type|$bar ($used / $total)"
+}
+
+# --- НАГРУЗКА CPU С БАРОМ ---
+get_cpu_load_visual() {
+    local cores; cores=$(nproc)
+    local load; load=$(uptime | awk -F'load average: ' '{print $2}' | cut -d, -f1 | xargs)
+    
+    # Считаем процент нагрузки (Load / Cores * 100)
+    local perc
+    perc=$(awk "BEGIN {printf \"%.0f\", ($load / $cores) * 100}")
+    
+    local bar; bar=$(draw_bar "$perc")
+    
+    echo "$bar ($load / $cores vCore)"
+}
+
+get_location() {
+    # Получаем страну (Code), например FI
+    local country
+    country=$(curl -s --connect-timeout 2 ipinfo.io/country 2>/dev/null || echo "UNK")
+    echo "$country"
+}
+
+get_active_users() {
+    # Считаем уникальных юзеров
+    local count
+    count=$(who | cut -d' ' -f1 | sort | uniq | wc -l)
+    echo "$count"
+}
+
 get_docker_version() { 
     local container_name="$1"
     local version=""
@@ -268,8 +609,87 @@ get_docker_version() {
     image_id=$(run_cmd docker inspect --format='{{.Image}}' "$container_name" 2>/dev/null | cut -d':' -f2)
     echo "latest (образ: ${image_id:0:7})"
 }
+# === НОВЫЕ ФУНКЦИИ ДЛЯ DASHBOARD v2.0 ===
 
-scan_server_state() {
+get_os_ver() {
+    if [ -f /etc/os-release ]; then
+        # Вытаскиваем красивое имя, например "Ubuntu 22.04.3 LTS"
+        grep -oP 'PRETTY_NAME="\K[^"]+' /etc/os-release | head -n 1
+    else
+        echo "Linux (Unknown)"
+    fi
+}
+
+get_kernel() {
+    uname -r | cut -d'-' -f1  # Показываем только версию ядра, без лишнего мусора
+}
+
+get_uptime() {
+    # Красивый аптайм: "2 days, 4 hours" или "15 min"
+    uptime -p | sed 's/up //;s/ hours\?,/ч/;s/ minutes\?/мин/;s/ days\?,/д/;s/ weeks\?,/нед/'
+}
+
+get_virt_type() {
+    local virt
+    virt=$(systemd-detect-virt 2>/dev/null)
+    if [ "$virt" == "kvm" ] || [ "$virt" == "qemu" ]; then
+        echo "KVM (Честное железо)"
+    elif [ "$virt" == "lxc" ] || [ "$virt" == "openvz" ]; then
+        echo "Container ($virt) - ⚠️"
+    elif [ "$virt" == "none" ]; then
+        echo "Bare Metal (Дед)"
+    else
+        echo "${virt:-Unknown}"
+    fi
+}
+
+get_ping_google() {
+    # Пинг до гугла, берем среднее значение. Быстро, дерзко.
+    local p
+    p=$(ping -c 1 -W 1 8.8.8.8 2>/dev/null | grep 'time=' | awk -F'time=' '{print $2}' | cut -d' ' -f1)
+    if [ -z "$p" ]; then
+        echo "OFFLINE ❌"
+    else
+        echo "${p} ms ⚡"
+    fi
+}
+
+# УЛУЧШЕННАЯ версия CPU (чистит мусор RHEL/QEMU)
+get_cpu_info() { 
+    local model
+    model=$(lscpu | grep "Model name" | sed 's/.*Model name:[[:space:]]*//' | sed 's/ @.*//')
+    # Если lscpu выдал дичь типа "QEMU Virtual CPU", пробуем /proc/cpuinfo
+    if [[ "$model" == *"QEMU"* ]] || [[ "$model" == *"Common KVM"* ]] || [ -z "$model" ]; then
+        model=$(cat /proc/cpuinfo | grep 'model name' | head -n 1 | cut -d: -f2 | xargs)
+    fi
+    # Если всё ещё пусто или мусор
+    if [ -z "$model" ]; then model="Unknown CPU"; fi
+    
+    # Обрезаем слишком длинные названия, чтобы не ломать таблицу
+    echo "$model" | cut -c 1-35
+}
+
+# УЛУЧШЕННАЯ версия RAM + SWAP
+get_ram_swap_info() {
+    local ram_used; ram_used=$(free -m | grep Mem | awk '{print $3}')
+    local ram_total; ram_total=$(free -m | grep Mem | awk '{print $2}')
+    local swap_used; swap_used=$(free -m | grep Swap | awk '{print $3}')
+    
+    # Конвертируем в ГБ, если больше 1024МБ, иначе в МБ
+    local ram_str
+    if [ "$ram_total" -gt 1024 ]; then
+        ram_str=$(awk "BEGIN {printf \"%.1f/%.1f GB\", $ram_used/1024, $ram_total/1024}")
+    else
+        ram_str="${ram_used}/${ram_total} MB"
+    fi
+
+    if [ "$swap_used" -ne 0 ]; then
+        echo "$ram_str (Swap: ${swap_used}MB)"
+    else
+        echo "$ram_str"
+    fi
+}
+scan_server_state() { 
     # Сброс переменных перед сканированием
     SERVER_TYPE="Чистый сервак"
     PANEL_VERSION=""
@@ -891,56 +1311,8 @@ security_menu() {
 }
 
 # ============================================================ #
-#                   ОБНОВЛЕНИЕ СИСТЕМЫ                         #
+#          ОБНОВЛЕНИЕ СИСТЕМЫ + EOL FIX (ULTRA EDITION)        #
 # ============================================================ #
-system_update_wizard() {
-    # Проверяем, есть ли apt (Debian/Ubuntu)
-    if ! command -v apt &> /dev/null; then 
-        echo "Утилита apt не найдена. Похоже, это не Debian/Ubuntu."
-        return
-    fi
-
-    clear
-    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
-    printf "%b\n" "${C_CYAN}║               ОБНОВЛЕНИЕ СИСТЕМЫ (APT)                       ║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
-    echo ""
-    printf "%b\n" "${C_BOLD}Будут выполнены следующие действия:${C_RESET}"
-    printf "  1. %b\n" "${C_GREEN}apt update${C_RESET}       - Обновление списков пакетов"
-    printf "  2. %b\n" "${C_GREEN}apt upgrade${C_RESET}      - Обновление установленных программ"
-    printf "  3. %b\n" "${C_GREEN}apt full-upgrade${C_RESET} - Полное обновление (с разрешением конфликтов)"
-    printf "  4. %b\n" "${C_GREEN}apt autoremove${C_RESET}   - Удаление неиспользуемых зависимостей"
-    printf "  5. %b\n" "${C_GREEN}apt autoclean${C_RESET}    - Очистка кэша пакетов"
-    printf "  6. %b\n" "${C_GREEN}apt install sudo${C_RESET} - Установка утилиты sudo (если нет)"
-    echo ""
-    
-    read -p "Запустить полное обновление? (y/n): " confirm_upd
-    if [[ "$confirm_upd" == "y" || "$confirm_upd" == "Y" ]]; then
-        echo ""
-        log "Запущено полное обновление системы..."
-        printf "%b\n" "${C_YELLOW}🚀 Поехали! Это может занять время...${C_RESET}"
-        
-        run_cmd apt update
-        run_cmd apt upgrade -y
-        run_cmd apt full-upgrade -y
-        run_cmd apt autoremove -y
-        run_cmd apt autoclean
-        run_cmd apt install -y sudo
-        
-        # Запоминаем дату обновления
-        save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
-        
-        printf "\n%b\n" "${C_GREEN}✅ Система полностью обновлена и очищена.${C_RESET}"
-        log "Обновление системы завершено успешно."
-        wait_for_enter
-    else
-        echo "Ок, отмена."
-        # Если отказался, тоже запоминаем, чтобы сегодня больше не спрашивать
-        save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
-        sleep 1
-    fi
-}
-
 offer_initial_update() {
     # Проверяем, предлагали ли мы уже сегодня обновление
     local last_check; last_check=$(load_path "LAST_SYS_UPDATE")
@@ -951,54 +1323,280 @@ offer_initial_update() {
         return
     fi
     
-    # Если не спрашивали - запускаем визард
-    system_update_wizard
+    clear
+    printf "%b\n" "${C_CYAN}👋 Здарова, босс. Новый день — новые заботы.${C_RESET}"
+    echo "Система давно не проверялась на наличие обновлений."
+    echo "Актуальный софт — залог того, что тебя не взломают."
+    echo ""
+    read -p "Запустить быструю проверку и обновление системы? (y/n): " confirm_initial
+    
+    if [[ "$confirm_initial" == "y" || "$confirm_initial" == "Y" ]]; then
+        # Запускаем нашу мощную функцию
+        fix_eol_and_update
+    else
+        echo "Ок, напомню завтра. Не запускай систему."
+        # Запоминаем дату отказа, чтобы сегодня больше не долбить
+        save_path "LAST_SYS_UPDATE" "$today"
+        sleep 1
+    fi
+}
+
+fix_eol_and_update() {
+    # Проверяем, есть ли apt (Debian/Ubuntu)
+    if ! command -v apt &> /dev/null; then 
+        echo "⚠️  Утилита apt не найдена. Похоже, это не Debian/Ubuntu. Я тут бессилен."
+        wait_for_enter
+        return
+    fi
+
+    clear
+    printf "%b\n" "${C_CYAN}╔══════════════════════════════════════════════════════════════╗${C_RESET}"
+    printf "%b\n" "${C_CYAN}║           ЦЕНТР ОБНОВЛЕНИЯ И РЕАНИМАЦИИ СИСТЕМЫ              ║${C_RESET}"
+    printf "%b\n" "${C_CYAN}╚══════════════════════════════════════════════════════════════╝${C_RESET}"
+    echo ""
+    echo "📝 ЧТО МЫ СЕЙЧАС БУДЕМ ДЕЛАТЬ:"
+    echo "1. Проверим интернет (без него каши не сваришь)."
+    echo "2. Попробуем обновить список пакетов через официальные зеркала."
+    echo "3. Если получим ошибку '404 Not Found', значит твоя версия Ubuntu устарела (EOL)."
+    echo "   В этом случае я предложу переключиться на архивные сервера (Old Releases),"
+    echo "   чтобы ты снова мог ставить программы и обновления безопасности."
+    echo "---------------------------------------------------------------------"
+    echo ""
+    
+    # 1. Проверка интернета перед боем
+    printf "%b" "[*] Проверяю связь с внешним миром... "
+    if curl -s --connect-timeout 3 google.com >/dev/null; then
+        printf "%b\n" "${C_GREEN}Есть контакт.${C_RESET}"
+    else
+        printf "%b\n" "${C_RED}Связи нет!${C_RESET}"
+        echo "   Проверь DNS или кабель. Я не волшебник, без инета не обновлю."
+        wait_for_enter
+        return
+    fi
+
+    printf "%b\n" "${C_BOLD}[*] Попытка стандартного обновления (apt update)...${C_RESET}"
+    
+    # 2. Пробуем обновиться по-человечески
+    if run_cmd apt-get update; then
+        # Если update прошёл успешно - просто обновляем
+        printf "\n%b\n" "${C_GREEN}✅ Отлично! Официальные зеркала доступны.${C_RESET}"
+        echo "Запускаю полное обновление пакетов..."
+        run_cmd apt-get upgrade -y
+        run_cmd apt-get full-upgrade -y
+        run_cmd apt-get autoremove -y
+        run_cmd apt-get autoclean
+        
+        # Проверка на наличие sudo (бывает слетает в минималках)
+        if ! command -v sudo &> /dev/null; then
+             echo "   -> Доустанавливаю sudo, а то его нет..."
+             run_cmd apt-get install -y sudo
+        fi
+        
+        # Запоминаем дату, чтобы сегодня больше не приставать
+        save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
+        
+        printf "\n%b\n" "${C_GREEN}✅ Система полностью обновлена. Всё работает штатно.${C_RESET}"
+        log "Обновление системы (Standard) успешно."
+        wait_for_enter
+    else
+        # 3. Если упало - объясняем юзеру, что случилось
+        printf "\n%b\n" "${C_RED}❌ ОШИБКА ОБНОВЛЕНИЯ! (Зеркала ответили 404 Not Found)${C_RESET}"
+        echo "---------------------------------------------------------------------"
+        printf "%b\n" "${C_YELLOW}ЧТО ЭТО ЗНАЧИТ:${C_RESET}"
+        echo "Твоя версия Ubuntu/Debian устарела и официально больше не поддерживается (EOL)."
+        echo "Разработчики удалили файлы с основных серверов, поэтому 'apt update' не работает."
+        echo ""
+        echo "КАК ЭТО ЛЕЧИТЬ:"
+        echo "Нужно заменить адреса в конфигах с 'archive.ubuntu.com' на 'old-releases.ubuntu.com'."
+        echo "Это вернёт возможность устанавливать софт."
+        echo "---------------------------------------------------------------------"
+        
+        read -p "🚑 Применить лечение (FIX EOL) и обновить систему? (y/n): " confirm_fix
+        
+        if [[ "$confirm_fix" == "y" || "$confirm_fix" == "Y" ]]; then
+            log "Запуск процедуры EOL Fix..."
+            
+            # --- БЭКАП ---
+            local BACKUP_DIR="/var/backups/reshala/apt_sources"
+            local TIMESTAMP
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            
+            printf "\n%b\n" "${C_YELLOW}📦 Сначала делаю бэкап старых конфигов в ${BACKUP_DIR}...${C_RESET}"
+            run_cmd mkdir -p "$BACKUP_DIR"
+            
+            if [ -f /etc/apt/sources.list ]; then
+                run_cmd cp /etc/apt/sources.list "$BACKUP_DIR/sources.list.$TIMESTAMP"
+                echo "   -> sources.list сохранён."
+            fi
+            
+            if [ -d /etc/apt/sources.list.d ] && [ "$(ls -A /etc/apt/sources.list.d 2>/dev/null)" ]; then
+                run_cmd cp -r /etc/apt/sources.list.d "$BACKUP_DIR/sources.list.d.$TIMESTAMP"
+                echo "   -> sources.list.d/ сохранён."
+            fi
+
+            # --- ЛЕЧЕНИЕ ---
+            printf "\n%b\n" "${C_YELLOW}🔧 Исправляю адреса серверов (sed surgery)...${C_RESET}"
+            
+            # Лечим основной sources.list
+            run_cmd sed -i -r 's/([a-z]{2}\.)?archive.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+            run_cmd sed -i -r 's/security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+            # Порты для ARM/RPi
+            run_cmd sed -i -r 's/ports.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list
+
+            # Пробуем лечить и файлы в .d
+            if [ -d /etc/apt/sources.list.d ]; then
+                find /etc/apt/sources.list.d -name "*.list" -type f -exec sudo sed -i -r 's/([a-z]{2}\.)?archive.ubuntu.com/old-releases.ubuntu.com/g' {} +
+                find /etc/apt/sources.list.d -name "*.list" -type f -exec sudo sed -i -r 's/security.ubuntu.com/old-releases.ubuntu.com/g' {} +
+            fi
+            
+            printf "%b\n" "${C_GREEN}✅ Адреса заменены. Пробую обновиться снова...${C_RESET}"
+            
+            if run_cmd apt-get update; then
+                printf "\n%b\n" "${C_GREEN}✨ ПОЛУЧИЛОСЬ! Система увидела репозитории!${C_RESET}"
+                echo "Запускаю установку обновлений..."
+                run_cmd apt-get upgrade -y
+                run_cmd apt-get full-upgrade -y
+                run_cmd apt-get autoremove -y
+                run_cmd apt-get autoclean
+                
+                # Запоминаем дату
+                save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
+                
+                printf "\n%b\n" "${C_GREEN}✅ EOL Fix сработал, всё обновлено. Живём!${C_RESET}"
+                log "Обновление системы (EOL fix) успешно завершено."
+            else
+                printf "\n%b\n" "${C_RED}❌ Не прокатило. Пациент скорее мёртв.${C_RESET}"
+                echo "Возможные причины:"
+                echo "1. Проблемы с DNS/Фаерволом."
+                echo "2. У тебя архитектура или версия, которой нет даже в архиве."
+                echo "Бэкап лежит тут: $BACKUP_DIR"
+                log "Обновление после EOL fix не удалось."
+            fi
+        else
+            echo "Хозяин - барин. Но без обновлений далеко не уедешь."
+            # Если отказался, всё равно запоминаем дату, чтобы не спрашивать 100 раз в день
+            save_path "LAST_SYS_UPDATE" "$(date +%Y%m%d)"
+        fi
+        wait_for_enter
+    fi
 }
 
 # ============================================================ #
 #                   ГЛАВНОЕ МЕНЮ И ИНФО-ПАНЕЛЬ                 #
 # ============================================================ #
 display_header() {
-    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}'); local net_status; net_status=$(get_net_status); local cc; cc=$(echo "$net_status" | cut -d'|' -f1); local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2); local cc_status; if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}МАКСИМУМ (bbr + cake)"; else cc_status="${C_GREEN}АКТИВЕН (bbr + $qdisc)"; fi; else cc_status="${C_YELLOW}СТОК ($cc)"; fi; local ipv6_status; ipv6_status=$(check_ipv6_status); local cpu_info; cpu_info=$(get_cpu_info); local cpu_load; cpu_load=$(get_cpu_load); local ram_info; ram_info=$(get_ram_info); local disk_info; disk_info=$(get_disk_info); local hoster_info; hoster_info=$(get_hoster_info); 
+    # Сбор данных
+    local ip_addr; ip_addr=$(hostname -I | awk '{print $1}')
+    local location; location=$(get_location)
+    local os_ver; os_ver=$(get_os_ver)
+    local kernel; kernel=$(get_kernel)
+    local uptime; uptime=$(get_uptime)
+    local virt; virt=$(get_virt_type)
+    local ping; ping=$(get_ping_google)
     
-    clear; local max_label_width=11
-    printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]${C_RESET}"
-    printf "%b\n" "${C_CYAN}║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╠═[ ИНФО ПО СЕРВЕРУ ]${C_RESET}"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "IP Адрес" "$ip_addr"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Хостер" "$hoster_info"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Процессор" "$cpu_info"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Нагрузка" "$cpu_load"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Оперативка" "$ram_info"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Диск" "$disk_info"
-    printf "%b\n" "${C_CYAN}║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╠═[ СТАТУС СИСТЕМ ]${C_RESET}"
+    local cpu_info; cpu_info=$(get_cpu_info_clean)
+    local cpu_load_viz; cpu_load_viz=$(get_cpu_load_visual)
+    local ram_viz; ram_viz=$(get_ram_visual)
     
-    # Логика отображения статуса
-    if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
-        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "Панель v${PANEL_VERSION} и Нода v${NODE_VERSION}"
-    elif [[ "$SERVER_TYPE" == "Панель" ]]; then
-        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "Панель v${PANEL_VERSION}"
-    elif [[ "$SERVER_TYPE" == "Нода" ]]; then
-        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_YELLOW}%s${C_RESET}\n" "Установка" "Нода v${NODE_VERSION}"
-    elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
-         printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_RED}%s${C_RESET}\n" "Установка" "СЕРВАК НЕ ЦЕЛКА (Левый софт)"
+    local disk_raw; disk_raw=$(get_disk_visual)
+    local disk_type; disk_type=$(echo "$disk_raw" | cut -d'|' -f1)
+    local disk_viz; disk_viz=$(echo "$disk_raw" | cut -d'|' -f2)
+    
+    local hoster_info; hoster_info=$(get_hoster_info)
+    local users_online; users_online=$(get_active_users)
+    local port_speed; port_speed=$(get_port_speed)
+    
+    # --- ЛОГИКА ВМЕСТИМОСТИ ---
+    local saved_speed; saved_speed=$(load_path "LAST_UPLOAD_SPEED")
+    local capacity_display
+    
+    if [ -n "$saved_speed" ] && [ "$saved_speed" -gt 0 ]; then
+        # Если есть сохраненный тест
+        local real_cap; real_cap=$(calculate_vpn_capacity "$saved_speed")
+        capacity_display="${C_GREEN}~${real_cap}${C_RESET}"
     else
-        printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_GREEN}%s${C_RESET}\n" "Установка" "$SERVER_TYPE"
+        # Если теста не было
+        local theory_cap; theory_cap=$(calculate_vpn_capacity "")
+        capacity_display="${C_WHITE}~${theory_cap}${C_RESET} ${C_YELLOW}[Тест: 9]${C_RESET}"
+    fi
+    # --------------------------
+    
+    local net_status; net_status=$(get_net_status)
+    local cc; cc=$(echo "$net_status" | cut -d'|' -f1)
+    local qdisc; qdisc=$(echo "$net_status" | cut -d'|' -f2)
+    local cc_status
+    if [[ "$cc" == "bbr" || "$cc" == "bbr2" ]]; then 
+        if [[ "$qdisc" == "cake" ]]; then cc_status="${C_GREEN}MAX (bbr+cake)${C_RESET}"; 
+        else cc_status="${C_GREEN}ON (bbr+$qdisc)${C_RESET}"; fi
+    else cc_status="${C_YELLOW}STOCK ($cc)${C_RESET}"; fi
+    local ipv6_status; ipv6_status=$(check_ipv6_status)
+
+    clear
+    
+    # ШАПКА
+    printf "%b\n" "${C_CYAN}╔═[ ИНСТРУМЕНТ «РЕШАЛА» ${VERSION} ]═════════════════════════════╗${C_RESET}"
+    printf "%b\n" "${C_CYAN}║${C_RESET}"
+    
+    # --- СИСТЕМА (Ручное выравнивание) ---
+    printf "%b\n" "${C_CYAN}╠═[ СИСТЕМА ]${C_RESET}"
+    #                                12345678901234
+    printf "║ ${C_GRAY}ОС / Ядро      :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$os_ver ($kernel)"
+    printf "║ ${C_GRAY}Аптайм         :${C_RESET} ${C_WHITE}%s${C_RESET}  (Юзеров: $users_online)\n" "$uptime"
+    printf "║ ${C_GRAY}Виртуалка      :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$virt"
+    printf "║ ${C_GRAY}IP Адрес       :${C_RESET} ${C_YELLOW}%s${C_RESET}  (Пинг: $ping) [${C_CYAN}$location${C_RESET}]\n" "$ip_addr"
+    printf "║ ${C_GRAY}Хостер         :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$hoster_info"
+    
+    printf "%b\n" "${C_CYAN}║${C_RESET}"
+    
+    # --- ЖЕЛЕЗО ---
+    printf "%b\n" "${C_CYAN}╠═[ ЖЕЛЕЗО ]${C_RESET}"
+    printf "║ ${C_GRAY}CPU Модель     :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "$cpu_info"
+    printf "║ ${C_GRAY}Загрузка CPU   :${C_RESET} %s\n" "$cpu_load_viz"
+    printf "║ ${C_GRAY}Память (RAM)   :${C_RESET} %s\n" "$ram_viz"
+    printf "║ ${C_GRAY}Диск (%-3s)     :${C_RESET} %s\n" "$disk_type" "$disk_viz"
+
+    printf "%b\n" "${C_CYAN}║${C_RESET}"
+    
+    # --- STATUS ---
+    printf "%b\n" "${C_CYAN}╠═[ STATUS ]${C_RESET}"
+    
+    if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_GREEN}%s${C_RESET}\n" "🔥 COMBO (Панель + Нода)"
+        printf "║ ${C_GRAY}Версии         :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "P: v${PANEL_VERSION} | N: v${NODE_VERSION}"
+    elif [[ "$SERVER_TYPE" == "Панель" ]]; then
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_GREEN}%s${C_RESET} (v${PANEL_VERSION})\n" "Панель управления"
+    elif [[ "$SERVER_TYPE" == "Нода" ]]; then
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_GREEN}%s${C_RESET} (v${NODE_VERSION})\n" "Боевая Нода"
+    elif [[ "$SERVER_TYPE" == "Сервак не целка" ]]; then
+         printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_RED}%s${C_RESET}\n" "НЕ НАЙДЕНО / СТОРОННИЙ СОФТ"
+    else
+        printf "║ ${C_GRAY}Remnawave      :${C_RESET} ${C_WHITE}%s${C_RESET}\n" "Не установлена"
     fi
 
-    if [ "$BOT_DETECTED" -eq 1 ]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Бот" "v${BOT_VERSION}"; fi
-    if [[ "$WEB_SERVER" != "Не определён" ]]; then printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : ${C_CYAN}%s${C_RESET}\n" "Веб-сервер" "$WEB_SERVER"; fi
-    printf "%b\n" "${C_CYAN}║${C_RESET}"
-    printf "%b\n" "${C_CYAN}╠═[ СЕТЕВЫЕ НАСТРОЙКИ ]${C_RESET}"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "Тюнинг" "$cc_status"
-    printf "║ ${C_GRAY}%-${max_label_width}s${C_RESET} : %b\n" "IPv6" "$ipv6_status"
-    printf "%b\n" "${C_CYAN}╚${C_RESET}"
+    if [ "$BOT_DETECTED" -eq 1 ]; then 
+        printf "║ ${C_GRAY}Bedalaga       :${C_RESET} ${C_CYAN}АКТИВЕН${C_RESET} (v${BOT_VERSION})\n"
+    fi
+    
+    if [[ "$WEB_SERVER" != "Не определён" ]]; then 
+        printf "║ ${C_GRAY}Web-Server     :${C_RESET} ${C_CYAN}%s${C_RESET}\n" "$WEB_SERVER" 
+    fi
+    
+    # Показываем скорость порта только если она определена
+    if [ -n "$port_speed" ]; then
+        printf "║ ${C_GRAY}Канал (Link)   :${C_RESET} ${C_BOLD}%s${C_RESET}\n" "$port_speed"
+    fi
+    
+    # Вместимость с учетом сохраненного теста
+    printf "║ ${C_GRAY}Вместимость    :${C_RESET} %b юзеров\n" "$capacity_display"
+
+    printf "║ ${C_GRAY}Тюнинг         :${C_RESET} %b  |  IPv6: %b\n" "$cc_status" "$ipv6_status"
+    
+    printf "%b\n" "${C_CYAN}╚════════════════════════════════════════════════════════════════╝${C_RESET}"
 }
 
 show_menu() {
-    # Убираем глобальный trap, обрабатываем локально
-    local INT_SHOWN=0
+    # === ЗАЩИТА ОТ CTRL+C (ANTI-SPAM EDITION) ===
+    trap 'printf "\r\033[K%b" "${C_RED}🛑 Куда собрался? Жми [q], чтобы выйти как нормальный пацан!${C_RESET}"; sleep 0.8' SIGINT
 
     while true; do
         scan_server_state
@@ -1011,13 +1609,12 @@ show_menu() {
         fi
 
         printf "\n%s\n\n" "Чё делать будем, босс?";
-        printf "   [0] %b\n" "🔄 Обновить систему (apt update & upgrade)"
+        printf "   [0] %b\n" "🔄 ОБНОВИТЬ СИСТЕМУ (Умное обновление + Лечение EOL)"
         echo "   [1] 🚀 Управление «Форсажем» (BBR+CAKE)"
         echo "   [2] 🌐 Управление IPv6"
         echo "   [3] 📜 Посмотреть журнал «Решалы»"
         if [ "$BOT_DETECTED" -eq 1 ]; then echo "   [4] 🤖 Посмотреть логи Бота"; fi
         
-        # Логика для кнопки логов (Панель/Нода)
         if [[ "$SERVER_TYPE" == "Панель и Нода" ]]; then
              echo "   [5] 📊 Посмотреть логи Панели (Основное)"
         elif [[ "$SERVER_TYPE" == "Панель" ]]; then
@@ -1028,6 +1625,8 @@ show_menu() {
 
         printf "   [6] %b\n" "🛡️ Безопасность сервера ${C_YELLOW}(SSH ключи)${C_RESET}"
         echo "   [7] 🐳 Управление Docker"
+        echo "   [8] 💿 Установить Панель Remnawave (High-Load)"
+        printf "   [9] %b\n" "⚡ Тест скорости до Москвы (Speedtest)"
 
         if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then
             printf "   %b[u] ‼️ОБНОВИТЬ РЕШАЛУ‼️%b\n" "${C_BOLD}${C_YELLOW}" "${C_RESET}"
@@ -1041,24 +1640,15 @@ show_menu() {
         echo "------------------------------------------------------"
 
         local choice=""
-        # Обработка ввода с защитой от Ctrl+C
+        
         if ! read -r -p "Твой выбор, босс: " choice; then
-            # read завершился ошибкой (например, SIGINT)
-            if [ "$INT_SHOWN" != "1" ]; then
-                printf "\n%b\n" "${C_YELLOW}⚠️  Не убивай меня! Используй пункт [q] для выхода.${C_RESET}"
-                sleep 1
-                INT_SHOWN=1
-            fi
             continue
-        else
-            INT_SHOWN=0
         fi
 
-        # Логируем выбор пользователя
         log "Пользователь выбрал пункт меню: $choice"
 
         case $choice in
-            0) system_update_wizard;;
+            0) fix_eol_and_update;;
             1) apply_bbr; wait_for_enter;;
             2) ipv6_menu;;
             3) view_logs_realtime "$LOGFILE" "Решалы";;
@@ -1066,9 +1656,15 @@ show_menu() {
             5) if [[ "$SERVER_TYPE" != "Чистый сервак" && "$SERVER_TYPE" != "Сервак не целка" ]]; then view_docker_logs "$PANEL_NODE_PATH" "$SERVER_TYPE"; else echo "Нет такой кнопки."; sleep 2; fi;;
             6) security_menu;;
             7) docker_cleanup_menu;;
+            8) run_module "install_panel.sh";;
+            9) run_speedtest_moscow;;
             [uU]) if [[ ${UPDATE_AVAILABLE:-0} -eq 1 ]]; then run_update; else echo "Ты слепой?"; sleep 2; fi;;
             [dD]) uninstall_script;;
-            [qQ]) echo "Был рад помочь. Не обосрись. 🥃"; break;;
+            [qQ]) 
+                trap - SIGINT
+                echo "Был рад помочь. Не обосрись. 🥃"
+                break
+                ;;
             *) echo "Ты прикалываешься?"; sleep 2;;
         esac
     done
@@ -1094,8 +1690,7 @@ main() {
             exit 1;
         fi
         trap "rm -f /tmp/tmp.*" EXIT
-        
-        # Предлагаем обновление (если сегодня еще не предлагали)
+
         offer_initial_update
         
         show_menu
