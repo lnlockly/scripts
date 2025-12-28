@@ -1041,7 +1041,7 @@ log() { echo "[\$(date '+%H:%M:%S')] - \$1"; }
 run_tc() {
     local cmd="\$*"
     local out
-    if ! out=\$(\$cmd 2>&1); then
+    if ! out=\$(  2>&1); then
         log "❌ \$cmd"
         log "   Ответ: \$out"
         exit 1
@@ -1050,31 +1050,31 @@ run_tc() {
 
 # === HELPER: ГЕНЕРАЦИЯ HTB ПАРАМЕТРОВ ===
 generate_htb_params() {
-    local direction="$1"
-    local rate="$2"
+    local direction="\${1:-}"   # ← ИСПРАВЛЕНИЕ!
+    local rate="\${2:-}"        # ← ИСПРАВЛЕНИЕ!
     
-    local params="htb rate $rate"
+    local params="htb rate \$rate"
     
-    if [[ "$direction" == "download" ]]; then
-        [[ "$DLRATEMODE" == "strict" ]] && params+=" ceil $rate"
-        [[ -n "$DLBURST" ]] && params+=" burst $DLBURST"
-        [[ -n "$DLCBURST" ]] && params+=" cburst $DLCBURST"
-        [[ -n "$DLQUANTUM" ]] && params+=" quantum $DLQUANTUM"
+    if [[ "\$direction" == "download" ]]; then
+        [[ "\$DLRATEMODE" == "strict" ]] && params+=" ceil \$rate"
+        [[ -n "\$DLBURST" ]] && params+=" burst \$DLBURST"
+        [[ -n "\$DLCBURST" ]] && params+=" cburst \$DLCBURST"
+        [[ -n "\$DLQUANTUM" ]] && params+=" quantum \$DLQUANTUM"
     else
-        [[ "$ULRATEMODE" == "strict" ]] && params+=" ceil $rate"
-        [[ -n "$ULBURST" ]] && params+=" burst $ULBURST"
-        [[ -n "$ULCBURST" ]] && params+=" cburst $ULCBURST"
-        [[ -n "$ULQUANTUM" ]] && params+=" quantum $ULQUANTUM"
+        [[ "\$ULRATEMODE" == "strict" ]] && params+=" ceil \$rate"
+        [[ -n "\$ULBURST" ]] && params+=" burst \$ULBURST"
+        [[ -n "\$ULCBURST" ]] && params+=" cburst \$ULCBURST"
+        [[ -n "\$ULQUANTUM" ]] && params+=" quantum \$ULQUANTUM"
     fi
     
-    echo "$params"
+    echo "\$params"
 }
 
 generate_sfq_params() {
     local params="sfq"
-    [[ -n "$SFQPERTURB" ]] && params+=" perturb $SFQPERTURB"
-    [[ -n "$SFQLIMIT" ]] && params+=" limit $SFQLIMIT"
-    echo "$params"
+    [[ -n "\${SFQPERTURB:-}" ]] && params+=" perturb \$SFQPERTURB"
+    [[ -n "\${SFQLIMIT:-}" ]] && params+=" limit \$SFQLIMIT"
+    echo "\$params"
 }
 
 
