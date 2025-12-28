@@ -328,7 +328,8 @@ _show_server_management_menu() {
         local remote_exec_command="SKYNET_MODE=1 ${INSTALL_PATH}"
 
         if [[ "$s_user" == "root" ]]; then
-            ssh "${ssh_opts[@]}" "$remote_target" "$remote_exec_command"
+            # Оборачиваем в bash -c для надёжной передачи переменной окружения
+            ssh "${ssh_opts[@]}" "$remote_target" "bash -c '${remote_exec_command}'"
         else
             local sudo_wrapper_command="echo '$s_pass' | sudo -S -p '' bash -c \"$remote_exec_command\""
             ssh "${ssh_opts[@]}" "$remote_target" "$sudo_wrapper_command"
