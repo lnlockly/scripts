@@ -325,13 +325,13 @@ _show_server_management_menu() {
         printf_info "Вхожу в удалённый терминал..."
         local ssh_opts=(-t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port")
         local remote_target="${s_user}@${s_ip}"
-        local remote_exec_command="SKYNET_MODE=1 ${INSTALL_PATH}"
+        # Исполняем команду через 'bash -l -c' чтобы гарантировать корректный $PATH после установки
+        local remote_exec_command="bash -l -c 'SKYNET_MODE=1 ${INSTALL_PATH}'"
 
         if [[ "$s_user" == "root" ]]; then
-            # Оборачиваем в bash -c для надёжной передачи переменной окружения
-            ssh "${ssh_opts[@]}" "$remote_target" "bash -c '${remote_exec_command}'"
+            ssh "${ssh_opts[@]}" "$remote_target" "$remote_exec_command"
         else
-            local sudo_wrapper_command="echo '$s_pass' | sudo -S -p '' bash -c \"$remote_exec_command\""
+            local sudo_wrapper_command="echo '$s_pass' | sudo -S -p '' ${remote_exec_command}"
             ssh "${ssh_opts[@]}" "$remote_target" "$sudo_wrapper_command"
         fi
         
