@@ -24,6 +24,10 @@
 
 [[ "${BASH_SOURCE[0]}" == "${0}" ]] && exit 1 # Защита от прямого запуска
 
+# Подключаем ядро и зависимости
+source "$SCRIPT_DIR/modules/core/common.sh"
+source "$SCRIPT_DIR/modules/core/dependencies.sh"
+
 # --- КОНФИГУРАЦИЯ ---
 if [[ -z "${TL_CONFIG_DIR:-}" ]]; then
     readonly TL_CONFIG_DIR="/etc/reshala/traffic_limiter"
@@ -94,7 +98,7 @@ show_traffic_limiter_menu() {
             4) _tl_view_service_log ;; 
             5) _tl_monitor_traffic ;;
             6) _tl_restart_service ;;
-            7) _tl_backup_menu ;;
+            7) _tl_backup_menu ;; 
             *) warn "Нет такого пункта." ;; 
         esac
         wait_for_enter
@@ -356,7 +360,7 @@ _tl_show_status() {
                 
                 local top_users
                 top_users=$(tc -s class show dev "$IFACE" | \
-                    awk -v parent="${dl_parent_class}" '
+                    awk -v parent="${dl_parent_class}" ' 
                         $1=="class" && $2=="htb" && $4=="parent" && $5==parent {
                             current_id=$3
                         }
@@ -435,7 +439,7 @@ _tl_show_listening_ports_smart() {
         local bind_addr_full
         bind_addr_full=$(echo "$listen_addr" | sed 's/:[^:]*$//')
         local bind_addr
-        bind_addr=$(echo "$bind_addr_full" | sed 's/\[//g; s/\]//g; s/%.*//' | xargs)
+        bind_addr=$(echo "$bind_addr_full" | sed 's/[[//g; s/]//g; s/%.*//' | xargs)
         
         local type_str="SPECIFIC"; local sort_key=3
         if [[ "$bind_addr" == "127.0.0.1" || "$bind_addr" == "::1" || "$bind_addr" == "localhost" || "$bind_addr" =~ ^127\.0\.0\.[0-9]+$ ]]; then
@@ -594,10 +598,9 @@ for conf_file in "${conf_files[@]}"; do
     log "   UL: Parent=2:$(printf %x $UL_PARENT_MINOR), Buckets=$(printf %x $UL_BUCKET_BASE)-$(printf %x $((UL_BUCKET_BASE + 255))), HashTable=$UL_HASH_HANDLE:"
     log "   Лимиты: DL $DOWN_LIMIT / UL $UP_LIMIT (Max: $MAX_USERS, Total: $PORT_TOTAL_LIMIT)"
 
-    # ============================================================
+    # ============================================================ 
     # DOWNLOAD (EGRESS на $IFACE)
-    # ============================================================
-    
+    # ============================================================    
     # 1. Родительский класс
     run_tc tc class add dev "$IFACE" parent 1: classid "1:$(printf %x $DL_PARENT_MINOR)" \
         htb rate "$PORT_TOTAL_LIMIT" ceil "$PORT_TOTAL_LIMIT" quantum 60000
@@ -632,10 +635,9 @@ for conf_file in "${conf_files[@]}"; do
             flowid "$CLASS_ID"
     done
 
-    # ============================================================
+    # ============================================================ 
     # UPLOAD (INGRESS на $IFB_DEV)
-    # ============================================================
-    
+    # ============================================================    
     # 1. Родительский класс
     run_tc tc class add dev "$IFB_DEV" parent 2: classid "2:$(printf %x $UL_PARENT_MINOR)" \
         htb rate "$PORT_TOTAL_LIMIT" ceil "$PORT_TOTAL_LIMIT" quantum 60000
