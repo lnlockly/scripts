@@ -523,7 +523,34 @@ run_tc() {
 
 log "🚀 Запуск Reshala Traffic Limiter (U32 Hash Mode)..."
 
-# Загрузка модулей
+# === ПРОВЕРКА ДОСТУПНОСТИ HTB ===
+if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
+    log "⚠️ Модуль sch_htb недоступен, пытаюсь установить..."
+    
+    # Попытка установки модулей
+    if command -v apt &>/dev/null; then
+        apt update &>/dev/null && apt install -y linux-modules-extra-$(uname -r) &>/dev/null
+    elif command -v yum &>/dev/null; then
+        yum install -y kernel-modules-extra &>/dev/null
+    fi
+    
+    # Попытка загрузки
+    modprobe sch_htb &>/dev/null || true
+    
+    # Финальная проверка
+    if ! tc qdisc add dev lo root handle 999: htb &>/dev/null; then
+        log "❌ ОШИБКА: HTB недоступен после установки!"
+        log "Решение:"
+        log "  1. Установи полное ядро: apt install linux-generic"
+        log "  2. Перезагрузись: reboot"
+        log "  3. Запусти скрипт снова"
+        exit 1
+    fi
+fi
+tc qdisc del dev lo root &>/dev/null || true
+log "✅ Модуль HTB доступен"
+
+# Загрузка остальных модулей
 modprobe ifb numifbs=1 &>/dev/null || true
 modprobe sch_htb &>/dev/null || true
 modprobe sch_sfq &>/dev/null || true
