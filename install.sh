@@ -11,7 +11,7 @@ set -e
 
 # --- Настройки (можно вынести, но для простоты оставим здесь) ---
 REPO_OWNER="DonMatteoVPN"
-REPO_NAME="reshala-script"
+REPO_NAME="Reshala-Remnawave-Bedolaga"
 REPO_BRANCH="main" # <-- ВАЖНО: Укажи правильную ветку!
 
 # --- Цвета ---
