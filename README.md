@@ -170,8 +170,12 @@ rm -f /usr/local/bin/reshala && rm -rf /opt/reshala && rm -f install.sh
 #### Криптовалюта:
 - **USDT (TRC20):** `TKPnnmtJcDM7B2uCoLQciwZmS7f8ckMNx9` 💎
 - **Bitcoin (BTC):** `bc1q235adg3dd4t43jmkpqka0hj305la43md38fc0n` ₿
-
 [💰 Донатик через Telegram](https://t.me/tribute/app?startapp=dxrn)
+
+
+## 🌟 История успеха
+[![Star History Chart](https://api.star-history.com/svg?repos=DonMatteoVPN/Reshala-Remnawave-Bedolaga&type=Date)](https://star-history.com/#DonMatteoVPN/Reshala-Remnawave-Bedolaga&Date)
+
 
 ## 🤝 Братва (Контрибьюторы)
 Респект всем, кто помогает делать этот инструмент лучше:
