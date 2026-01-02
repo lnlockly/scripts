@@ -173,3 +173,9 @@ rm -f /usr/local/bin/reshala && rm -rf /opt/reshala && rm -f install.sh
 
 [💰 Донатик через Telegram](https://t.me/tribute/app?startapp=dxrn)
 
+## 🤝 Братва (Контрибьюторы)
+Респект всем, кто помогает делать этот инструмент лучше:
+
+<a href="https://github.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=DonMatteoVPN/Reshala-Remnawave-Bedolaga" />
+</a>
