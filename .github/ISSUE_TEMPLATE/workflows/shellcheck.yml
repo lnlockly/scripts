@@ -1,0 +1,19 @@
+name: 🕵️ Шмон кода (ShellCheck)
+
+on:
+  push:
+    branches: [ "main", "dev" ]
+  pull_request:
+    branches: [ "main", "dev" ]
+
+jobs:
+  check:
+    name: Проверка скриптов
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run ShellCheck
+      uses: ludeeus/action-shellcheck@master
+      with:
+        scandir: './' # Где лежат твои скрипты
+        severity: error # Реагировать только на жесткие косяки
