@@ -1,9 +1,10 @@
+cat > /root/don_remna_up.sh << 'ENDOFFILE'
 #!/bin/bash
 
 # ==========================================
 #  DON MATTEO SYSTEM UPGRADER
 #  Code: LETHAL | Style: GANGSTA | Status: GOD MODE
-#  Edition: FINAL NAME FIX (v1.2)
+#  Edition: FIX & INSTALL (v1.3)
 # ==========================================
 
 # Цветовая палитра
@@ -14,6 +15,13 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
+
+# Ссылка на RAW версию скрипта (для авто-установки/обновления)
+UPDATE_URL="https://raw.githubusercontent.com/DonMatteoVPN/Reshala-Remnawave-Bedolaga/refs/heads/main/don_remna_up.sh"
+# Жесткий путь установки
+INSTALL_PATH="/root/don_remna_up.sh"
+# Симлинк
+LINK_PATH="/usr/local/bin/donup"
 
 # ==================================================================================
 # ⚙️  ЗОНА ДЛЯ РОВНЫХ ПАЦАНОВ (CONFIG ZONE)  ⚙️
@@ -37,52 +45,72 @@ SERVICES=(
 # ⛔ ДАЛЬШЕ НЕ ЛЕЗЬ, ТАМ ТОК И БОЛЬ (СИСТЕМНАЯ ЛОГИКА) ⛔
 # ==================================================================================
 
-# ========== БЛОК: Я ТУТ ТЕПЕРЬ ЖИВУ (AUTO-INSTALL) ==========
-REAL_PATH=$(readlink -f "$0")
-LINK_PATH="/usr/local/bin/donup"
-CURRENT_LINK_TARGET=$(readlink -f "$LINK_PATH" 2>/dev/null)
+# ========== БЛОК: САМО-УСТАНОВКА (SELF-INSTALL) ==========
+# Проверяем, запущен ли скрипт из правильного места.
+CURRENT_EXEC=$(readlink -f "$0")
 
-if [ "$REAL_PATH" != "$CURRENT_LINK_TARGET" ]; then
-    chmod +x "$REAL_PATH"
-    ln -sf "$REAL_PATH" "$LINK_PATH"
+# Если скрипт запущен не из /root/don_remna_up.sh (например, через curl pipe)
+if [ "$CURRENT_EXEC" != "$INSTALL_PATH" ]; then
+    clear
+    echo -e "${MAGENTA}🚀 Обнаружен запуск 'на лету' (через curl или из другой папки).${NC}"
+    echo -e "${YELLOW}📥 Скачиваю последнюю версию с GitHub прямо в систему...${NC}"
     
-    # Удаляем старый файл с неправильным именем, если он есть
-    if [ -f "/root/don_remna.sh" ]; then
-        rm -f "/root/don_remna.sh"
+    # Качаем файл
+    if command -v curl >/dev/null 2>&1; then
+        curl -s -o "$INSTALL_PATH" "$UPDATE_URL"
+    else
+        wget -q -O "$INSTALL_PATH" "$UPDATE_URL"
     fi
 
-    clear
-    echo -e "${GREEN}######################################################${NC}"
-    echo -e "${GREEN}#                                                    #${NC}"
-    echo -e "${GREEN}#     ✅ КОРОЧЕ, Я ПРОПИСАЛСЯ В СИСТЕМЕ. ВСЁ. ✅     #${NC}"
-    echo -e "${GREEN}#                                                    #${NC}"
-    echo -e "${GREEN}######################################################${NC}"
+    # Проверяем, скачалось ли
+    if [ ! -s "$INSTALL_PATH" ]; then
+        echo -e "${RED}❌ Ошибка скачивания! GitHub недоступен или ссылка кривая.${NC}"
+        # Если не скачалось, но мы уже существуем локально, продолжаем как есть.
+        # Если нет - выход.
+        exit 1
+    fi
+
+    # Даем права
+    chmod +x "$INSTALL_PATH"
+    
+    # Делаем симлинк
+    ln -sf "$INSTALL_PATH" "$LINK_PATH"
+
+    echo -e "${GREEN}✅ Установка завершена в $INSTALL_PATH${NC}"
+    echo -e "${GREEN}✅ Симлинк donup создан.${NC}"
     echo ""
-    echo -e "${YELLOW}Слушай сюда. Теперь я тут главный по обновам.${NC}"
-    echo -e "${YELLOW}Захочешь обновиться — просто свистни (введи команду):${NC}"
-    echo ""
-    echo -e "           👉  ${MAGENTA}donup${NC}  👈"
-    echo ""
-    echo -e "${CYAN}P.S. Старый файл я снес, чтобы ты не путался.${NC}"
-    echo ""
-    echo -e "Жми ${GREEN}[ENTER]${NC}, погнали работать, время — деньги..."
-    read
+    echo -e "${CYAN}🔄 Перезапускаю скрипт из правильного места...${NC}"
+    sleep 1
+    
+    # Передаем управление установленному файлу
+    exec bash "$INSTALL_PATH"
+    exit 0
 fi
 
-# ========== РАЗВЕДКА БОЕМ (PRE-SCAN) ==========
+# ========== РАЗВЕДКА БОЕМ (PRE-SCAN v2.0) ==========
 COMPOSE_FILE="$CORE_PATH/docker-compose.yml"
 SERVER_TYPE="UNKNOWN"
 SERVER_LABEL="НЕПОНЯТНАЯ ДИЧЬ"
 
 if [ -f "$COMPOSE_FILE" ]; then
-    if grep -q "container_name:.*remnawave" "$COMPOSE_FILE"; then
+    # ТЕПЕРЬ СМОТРИМ НА ОБРАЗЫ (IMAGE), А НЕ НА ИМЕНА КОНТЕЙНЕРОВ
+    # Это надежнее. Ищем ключевые слова в названиях образов.
+    
+    if grep -q "image:.*backend" "$COMPOSE_FILE" || grep -q "image:.*remnawave/panel" "$COMPOSE_FILE"; then
         SERVER_TYPE="PANEL"
         SERVER_LABEL="👑 ПАХАН (PANEL)"
-    elif grep -q "container_name:.*remnanode" "$COMPOSE_FILE"; then
+    elif grep -q "image:.*remnawave/node" "$COMPOSE_FILE"; then
         SERVER_TYPE="NODE"
         SERVER_LABEL="🚜 РАБОТЯГА (NODE)"
+    # Фолбэк на старый метод, если образы кастомные, но имена стандартные
+    elif grep -q "container_name:.*remnawave" "$COMPOSE_FILE"; then 
+        SERVER_TYPE="PANEL"
+        SERVER_LABEL="👑 ПАХАН (PANEL / DETECTED BY NAME)"
+    elif grep -q "container_name:.*remnanode" "$COMPOSE_FILE"; then
+        SERVER_TYPE="NODE"
+        SERVER_LABEL="🚜 РАБОТЯГА (NODE / DETECTED BY NAME)"
     else
-        SERVER_LABEL="👽 МУТАНТ (CUSTOM)"
+        SERVER_LABEL="👽 МУТАНТ (CUSTOM IMAGE)"
     fi
 else
     SERVER_LABEL="👻 ПРИЗРАК (НЕТ КОНФИГА)"
@@ -94,7 +122,7 @@ print_header() {
     clear
     echo -e "${MAGENTA}######################################################"
     echo -e "#                                                    #"
-    echo -e "#          💣 DON MATTEO UPGRADER v1.2 💣            #"
+    echo -e "#          💣 DON MATTEO UPGRADER v1.3 💣            #"
     echo -e "#            Инструмент для четких админов           #"
     echo -e "#       Косяков не прощаем. Работаем по красоте.     #"
     echo -e "#                                                    #"
@@ -157,7 +185,8 @@ confirm_execution() {
     echo ""
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${CYAN}💡 НЕ ВИДИШЬ СВОЮ ПАПКУ? РАЗУЙ ГЛАЗА!${NC}"
-    echo -e "   Зайди в файл и поправь пути, не позорься: ${YELLOW}nano $(readlink -f "$0")${NC}"
+    echo -e "   Зайди в файл и поправь пути, не позорься:"
+    echo -e "   ${YELLOW}nano $INSTALL_PATH${NC}" 
     echo -e "   Секция ${MAGENTA}CONFIG ZONE${NC} вверху. Я ждал, пока ты спросишь."
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
@@ -321,3 +350,6 @@ else
     echo ""
     cd "$CORE_PATH" && docker compose logs -f
 fi
+ENDOFFILE
+
+chmod +x /root/don_remna_up.sh
