@@ -4,7 +4,7 @@ cat > /root/don_remna_up.sh << 'ENDOFFILE'
 # ==========================================
 #  DON MATTEO SYSTEM UPGRADER
 #  Code: LETHAL | Style: GANGSTA | Status: GOD MODE
-#  Edition: RETURN OF THE LEGEND (v1.6)
+#  Edition: RETURN OF THE LEGEND (v1.7)
 # ==========================================
 
 # Цветовая палитра
@@ -148,7 +148,7 @@ print_header() {
     clear
     echo -e "${MAGENTA}######################################################"
     echo -e "#                                                    #"
-    echo -e "#          💣 DON MATTEO UPGRADER v1.6 💣            #"
+    echo -e "#          💣 DON MATTEO UPGRADER v1.7 💣            #"
     echo -e "#            Инструмент для четких админов           #"
     echo -e "#       Косяков не прощаем. Работаем по красоте.     #"
     echo -e "#                                                    #"
