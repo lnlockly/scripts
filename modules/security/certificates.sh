@@ -339,7 +339,8 @@ _cert_copy_to_fleet() {
         local name="$1" user="$2" ip="$3" port="$4" key_path="$5"
         printf_warning "--- ${name} (${ip}) ---"
 
-        _skynet_heal_host_key "$ip" "$port"
+        # Лечим host key если функция доступна (загружена из skynet/keys.sh)
+        type _skynet_heal_host_key &>/dev/null && _skynet_heal_host_key "$ip" "$port"
 
         # Копируем архив
         if ! scp -q -P "$port" -i "$key_path" -o StrictHostKeyChecking=no "$tmp_archive" "${user}@${ip}:/tmp/reshala_certs.tar.gz"; then
