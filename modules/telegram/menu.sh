@@ -44,7 +44,7 @@ _telegram_send_test_wrapper() {
     info "Выберите, куда отправить тест:"; local dest_choice_idx; dest_choice_idx=$(ask_selection "" $destinations) || return
     local i=1; local dest_name=""; for dest in $destinations; do if [[ $i -eq $dest_choice_idx ]]; then dest_name=$dest; break; fi; ((i++)); done
     local hostname; hostname=$(hostname -f)
-    local message="🧪 *Тестовое сообщение от Reshala*\n\nАдресат: \`$dest_name`\nСервер: \`$hostname`\nВремя: \`$(date '+%Y-%m-%d %H:%M:%S')`\n\nВсе работает отлично! 👍"
+    local message="🧪 *Тестовое сообщение от Reshala*\n\nАдресат: \`${dest_name}\`\nСервер: \`${hostname}\`\nВремя: \`$(date '+%Y-%m-%d %H:%M:%S')\`\n\nВсе работает отлично! 👍"
     info "Отправляю сообщение адресату '$dest_name'வுகளை..."
     if tg_notify "$dest_name" "$message"; then ok "Тестовое сообщение успешно отправлено!"; else err "Ошибка отправки. Проверьте токен, ID и лог."; fi
     wait_for_enter
@@ -53,7 +53,7 @@ _telegram_send_test_wrapper() {
 _telegram_disable_wrapper() {
     if ask_yes_no "Вы уверены, что хотите удалить ВСЕ настройки Telegram (токен и адресатов)?"; then
         local keys_to_delete; keys_to_delete=$(grep "^TG_" "${SCRIPT_DIR}/config/reshala.conf" | cut -d'=' -f1)
-        for key in $keys_to_delete; do sed -i "/^${key}=/d" "${SCRIPT_DIR}/config/reshala.conf" 2>/dev/null || true; done
+        for key in $keys_to_delete; do portable_sed_i "/^${key}=/d" "${SCRIPT_DIR}/config/reshala.conf" 2>/dev/null || true; done
         ok "Все настройки Telegram удалены."
     fi
     wait_for_enter
@@ -77,8 +77,8 @@ _telegram_delete_destination() {
     local i=1; local dest_name=""; for dest in $destinations; do if [[ $i -eq $dest_to_del_idx ]]; then dest_name=$dest; break; fi; ((i++)); done
     if [[ "$dest_name" == "DEFAULT" ]]; then warn "Адресата DEFAULT нельзя удалить."; wait_for_enter; return; fi
     if ask_yes_no "Вы уверены, что хотите удалить адресата '$dest_name'?"; then
-        sed -i "/^TG_CHAT_ID_${dest_name}=/d" "${SCRIPT_DIR}/config/reshala.conf"
-        sed -i "/^TG_TOPIC_ID_${dest_name}=/d" "${SCRIPT_DIR}/config/reshala.conf"
+        portable_sed_i "/^TG_CHAT_ID_${dest_name}=/d" "${SCRIPT_DIR}/config/reshala.conf"
+        portable_sed_i "/^TG_TOPIC_ID_${dest_name}=/d" "${SCRIPT_DIR}/config/reshala.conf"
         ok "Адресат '$dest_name' удален."
     fi; wait_for_enter
 }

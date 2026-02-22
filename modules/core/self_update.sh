@@ -87,7 +87,7 @@ uninstall_script() {
     # Сносим лог и базу флота, если есть
     if [ -n "${LOGFILE:-}" ]; then run_cmd rm -f "$LOGFILE" 2>/dev/null || true; fi
     if [ -n "${FLEET_DATABASE_FILE:-}" ]; then run_cmd rm -f "$FLEET_DATABASE_FILE" 2>/dev/null || true; fi
-    if [ -f "/root/.bashrc" ]; then run_cmd sed -i "/alias reshala='sudo reshala'/d" /root/.bashrc; fi
+    if [ -f "/root/.bashrc" ]; then run_cmd portable_sed_i "/alias reshala='sudo reshala'/d" /root/.bashrc; fi
     ok "Самоликвидация завершена. Переподключись к серверу, чтобы очистить alias/окружение."
     exit 0
 }

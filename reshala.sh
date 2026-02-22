@@ -13,6 +13,14 @@
 
 set -uo pipefail
 
+# Проверяем минимальную версию bash (4.0+) — нужен для mapfile, ассоциативных массивов и т.д.
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "[FATAL] Требуется bash 4.0 или новее. Текущая версия: ${BASH_VERSION}"
+    echo "На macOS установи свежий bash: brew install bash"
+    echo "И запускай скрипт через: /opt/homebrew/bin/bash $(readlink "$0" 2>/dev/null || echo "$0")"
+    exit 1
+fi
+
 # Определяем РЕАЛЬНОЕ местоположение скрипта, даже если он запущен через симлинк
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do

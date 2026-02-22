@@ -133,11 +133,23 @@ _skynet_add_server_wizard() {
 
     echo
     printf_info "🚀 Пробуем закинуть ключ на сервер..."
+    local deploy_ok=false
     if _deploy_key_to_host "$s_ip" "$s_port" "$s_user" "$final_key"; then
-        echo "$s_name|$s_user|$s_ip|$s_port|$final_key|$s_pass" >> "$FLEET_DATABASE_FILE"
-        printf_ok "Сервер '${s_name}' добавлен в флот."
-        
-        # Проверяем соединение и предлагаем усилить безопасность
+        deploy_ok=true
+    else
+        printf_warning "Не удалось закинуть ключ (сервер недоступен или неверный пароль)."
+        if ! ask_yes_no "Всё равно добавить сервер в базу? Ключ можно закинуть потом (y/n)" "y"; then
+            printf_info "Отмена. Сервер НЕ добавлен."
+            wait_for_enter
+            return
+        fi
+    fi
+
+    echo "$s_name|$s_user|$s_ip|$s_port|$final_key|$s_pass" >> "$FLEET_DATABASE_FILE"
+    printf_ok "Сервер '${s_name}' добавлен в флот."
+
+    # Проверяем соединение и предлагаем усилить безопасность (только если ключ успешно установлен)
+    if [[ "$deploy_ok" == true ]]; then
         if ssh -q -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no -i "$final_key" -p "$s_port" "${s_user}@${s_ip}" "echo OK" &>/dev/null; then
             printf_ok "Тестовое подключение по ключу прошло успешно."
             if ask_yes_no "Вырубаем вход по паролю и оставляем только ключи? (y/n)"; then
@@ -155,8 +167,6 @@ _skynet_add_server_wizard() {
                 fi
             fi
         fi
-    else
-        printf_error "Не удалось добавить сервер. Проверь данные."
     fi
     wait_for_enter
 }
@@ -173,7 +183,7 @@ _skynet_delete_server_wizard() {
     local d="${s[$((n-1))]}"
     IFS='|' read -r name _ <<< "$d"
     if ask_yes_no "Удалить сервер '${name}'?" "n"; then
-        sed -i "${n}d" "$FLEET_DATABASE_FILE"
+        portable_sed_i "${n}d" "$FLEET_DATABASE_FILE"
         ok "Сервер '${name}' удален."
         IFS='|' read -r _ _ _ _ key_path _ <<< "$d"
         if [[ "$key_path" == *"$SKYNET_UNIQUE_KEY_PREFIX"* ]] && ask_yes_no "Удалить связанный уникальный SSH ключ?" "y"; then
@@ -352,7 +362,7 @@ _show_server_management_menu() {
     }
     _sm_delete() { 
         if ask_yes_no "Удалить сервер '${s_name}'?" "n"; then 
-            sed -i "${server_idx}d" "$FLEET_DATABASE_FILE"; ok "Сервер удален."; 
+            portable_sed_i "${server_idx}d" "$FLEET_DATABASE_FILE"; ok "Сервер удален.";
             if [[ "$s_key" == *"$SKYNET_UNIQUE_KEY_PREFIX"* ]] && ask_yes_no "Удалить связанный ключ?" "y"; then 
                 rm -f "$s_key" "${s_key}.pub"&>/dev/null; ok "Ключ удален."; 
             fi; 
@@ -399,26 +409,28 @@ _show_server_security_menu() {
     IFS='|' read -r s_name s_user s_ip s_port s_key s_pass <<< "$server_data"
 
     # --- Внутренние функции-действия ---
+    local _pdir="${SCRIPT_DIR}/plugins/skynet_commands"
+    local _env="SSH_PORT=${s_port}"
     _sss_get_status() {
-        _skynet_run_plugin_on_server "security/00_get_security_status.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        _skynet_run_plugin_on_server_with_env "${_pdir}/security/00_get_security_status.sh" "$_env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key"
     }
     _sss_harden_ssh() {
-        _skynet_run_plugin_on_server "security/01_harden_ssh.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        _skynet_run_plugin_on_server_with_env "${_pdir}/security/01_harden_ssh.sh" "TARGET_SSH_PORT=${s_port}" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key"
     }
     _sss_change_port() {
-        _skynet_run_plugin_on_server "security/02_change_ssh_port.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        _skynet_run_plugin_on_server_with_env "${_pdir}/security/02_change_ssh_port.sh" "$_env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key"
     }
     _sss_setup_ufw() {
-        _skynet_run_plugin_on_server "security/03_setup_ufw.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        _skynet_run_plugin_on_server_with_env "${_pdir}/security/03_setup_ufw.sh" "$_env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key"
     }
     _sss_setup_f2b() {
-        _skynet_run_plugin_on_server "security/04_setup_fail2ban.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        _skynet_run_plugin_on_server_with_env "${_pdir}/security/04_setup_fail2ban.sh" "$_env" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key"
     }
     _sss_apply_kernel() {
-        _skynet_run_plugin_on_server "security/05_apply_kernel.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        _skynet_run_plugin_on_server "${_pdir}/security/05_apply_kernel.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key"
     }
     _sss_setup_login_notify() {
-        _skynet_run_plugin_on_server "security/06_setup_ssh_login_notify.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key" "$s_pass"
+        _skynet_run_plugin_on_server "${_pdir}/security/06_setup_ssh_login_notify.sh" "$s_name" "$s_user" "$s_ip" "$s_port" "$s_key"
     }
     # --- Конец внутренних функций ---
 
@@ -445,8 +457,10 @@ _show_server_security_menu() {
         action=$(get_menu_action "skynet_server_security" "$choice")
 
         if [[ -n "$action" ]]; then
+            # Извлекаем имя функции из action (может быть "run_module skynet/menu _sss_func" — нужна последняя часть)
+            local func_name="${action##* }"
             # Выполняем локальную функцию (_sss_... ), которая уже знает о сервере
-            "$action"
+            "$func_name"
             wait_for_enter
         else
             warn "Неверный выбор"

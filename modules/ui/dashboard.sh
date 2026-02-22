@@ -18,27 +18,63 @@ source "${SCRIPT_DIR}/modules/core/menu_generator.sh"
 # о системе и железе для дашборда. Не трогаем поведение без
 # серьёзной причины: на них завязаны почти все экраны.
 
-_get_os_ver() { grep -oP 'PRETTY_NAME="\K[^\"]+' /etc/os-release 2>/dev/null || echo "Linux"; }
+_get_os_ver() {
+    if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+        echo "macOS $(sw_vers -productVersion 2>/dev/null || echo '?')"
+    else
+        grep -oP 'PRETTY_NAME="\K[^\"]+' /etc/os-release 2>/dev/null || echo "Linux"
+    fi
+}
 _get_kernel() { uname -r | cut -d'-' -f1; }
-_get_uptime() { uptime -p | sed 's/up //;s/ hours\?,/ч/;s/ minutes\?/мин/;s/ days\?,/д/;s/ weeks\?,/нед/'; }
+_get_uptime() {
+    if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+        # macOS uptime не поддерживает -p
+        local boot_ts; boot_ts=$(sysctl -n kern.boottime 2>/dev/null | awk -F'[= ,]' '{print $4}')
+        if [[ -n "$boot_ts" && "$boot_ts" -gt 0 ]]; then
+            local now_ts; now_ts=$(date +%s)
+            local diff=$(( now_ts - boot_ts ))
+            local days=$(( diff / 86400 ))
+            local hours=$(( (diff % 86400) / 3600 ))
+            local mins=$(( (diff % 3600) / 60 ))
+            local result=""
+            [[ $days -gt 0 ]] && result="${days}д "
+            [[ $hours -gt 0 ]] && result="${result}${hours}ч "
+            result="${result}${mins}мин"
+            echo "$result"
+        else
+            uptime | awk -F'(up |,)' '{print $2}' | xargs
+        fi
+    else
+        uptime -p 2>/dev/null | sed 's/up //;s/ hours\?,/ч/;s/ minutes\?/мин/;s/ days\?,/д/;s/ weeks\?,/нед/' || uptime | awk -F'(up |,)' '{print $2}' | xargs
+    fi
+}
 _get_virt_type() {
+    if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+        echo "macOS (Desktop)"
+        return
+    fi
     local virt_output; virt_output=$(systemd-detect-virt 2>/dev/null || echo "unknown")
     local virt_type_clean; virt_type_clean=$(echo "$virt_output" | head -n1 | tr -d '\n' | xargs)
     local result=""
 
     case "$virt_type_clean" in
         kvm|qemu) result="KVM (Честное железо)" ;;
-        lxc|openvz) result="Container (${virt_type_clean^}) - ⚠️ Хуйня в контейнере (Беги отсюда)" ;; 
+        lxc|openvz) result="Container (${virt_type_clean^}) - Хуйня в контейнере (Беги отсюда)" ;;
         none) result="Физический сервер (Дед)" ;;
         *) result="${virt_type_clean^}" ;;
     esac
-    echo "$result" | tr -d '\n' | xargs # Ensure final output is single line
+    echo "$result" | tr -d '\n' | xargs
 }
-_get_public_ip() { curl -s --connect-timeout 4 -4 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'; }
+_get_public_ip() {
+    if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+        curl -s --connect-timeout 4 -4 ifconfig.me 2>/dev/null || echo "N/A"
+    else
+        curl -s --connect-timeout 4 -4 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'
+    fi
+}
 _get_location() {
     local out
     out=$(curl -s --connect-timeout 2 ipinfo.io/country 2>/dev/null || true)
-    # ipinfo в случае ошибки может вернуть JSON с Rate limit. Нас это не интересует.
     if [[ "$out" =~ ^[A-Z]{2}$ ]]; then
         echo "$out"
     else
@@ -48,23 +84,27 @@ _get_location() {
 _get_hoster_info() {
     local out
     out=$(curl -s --connect-timeout 5 ipinfo.io/org 2>/dev/null || true)
-    # Если пришёл JSON/ошибка (Rate limit и т.п.) — не светим мусор, просто "Не определён".
     if [[ "$out" == "" ]] || [[ "$out" == \{* ]]; then
         echo "Не определён"
     else
         echo "$out"
     fi
 }
-_get_active_users() { who | cut -d' ' -f1 | sort -u | wc -l; }
+_get_active_users() { who 2>/dev/null | cut -d' ' -f1 | sort -u | wc -l | xargs; }
 _get_ping_google() {
     local p; p=$(ping -c 1 -W 1 8.8.8.8 2>/dev/null | grep 'time=' | awk -F'time=' '{print $2}' | cut -d' ' -f1)
     [[ -z "$p" ]] && echo "OFFLINE ❌" || echo "${p} ms ⚡"
 }
 
 _get_cpu_info_clean() {
-    local model; model=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/(R)//g; s/(TM)//g; s/ @.*//g; s/CPU//g' | xargs)
-    [[ -z "$model" ]] && model=$(lscpu | grep "Model name" | sed -r 's/.*:\s+//' | sed 's/ @.*//')
-    echo "$model" | cut -c 1-35 # Обрезаем, чтобы не ломать вёрстку
+    local model=""
+    if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+        model=$(sysctl -n machdep.cpu.brand_string 2>/dev/null | sed 's/(R)//g; s/(TM)//g; s/ @.*//g; s/CPU//g' | xargs)
+    else
+        model=$(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | sed 's/(R)//g; s/(TM)//g; s/ @.*//g; s/CPU//g' | xargs)
+        [[ -z "$model" ]] && model=$(lscpu | grep "Model name" | sed -r 's/.*:\s+//' | sed 's/ @.*//')
+    fi
+    echo "${model:-Unknown}" | cut -c 1-35 # Обрезаем, чтобы не ломать вёрстку
 }
 
 _draw_bar() {
@@ -76,14 +116,22 @@ _draw_bar() {
 }
 
 _get_cpu_load_visual() {
-    # Для локального запуска считаем по /proc/stat, для SKYNET-агента — по loadavg, чтобы не мешать панели.
-    local cores; cores=$(nproc 2>/dev/null || echo 1)
+    local cores
+    if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+        cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
+    else
+        cores=$(nproc 2>/dev/null || echo 1)
+    fi
 
-    # В режиме SKYNET_MODE=1 (агент на удалённом сервере) берём 1-минутный loadavg
-    # и приводим его к процентам относительно числа vCore.
-    if [ "${SKYNET_MODE:-0}" -eq 1 ]; then
+    # macOS и SKYNET-агент: берём loadavg и приводим к процентам
+    if [[ "$_RESHALA_OS" == "Darwin" ]] || [ "${SKYNET_MODE:-0}" -eq 1 ]; then
         local load1
-        load1=$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo 0)
+        if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+            load1=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')
+        else
+            load1=$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo 0)
+        fi
+        [[ -z "$load1" ]] && load1=0
         local perc
         perc=$(awk -v l="$load1" -v c="$cores" 'BEGIN {
             if (c <= 0) c = 1;
@@ -97,7 +145,7 @@ _get_cpu_load_visual() {
         return
     fi
 
-    # Локальный режим: более честная оценка загрузки CPU через /proc/stat
+    # Linux локальный режим: более честная оценка загрузки CPU через /proc/stat
     local cpu_line1 cpu_line2
     cpu_line1=$(grep '^cpu ' /proc/stat 2>/dev/null)
     sleep 0.2
@@ -138,10 +186,27 @@ _get_cpu_load_visual() {
 }
 
 _get_ram_visual() {
-    local ram_info; ram_info=$(free -m | grep Mem)
-    local ram_used; ram_used=$(echo "$ram_info" | awk '{print $3}')
-    local ram_total; ram_total=$(echo "$ram_info" | awk '{print $2}')
-    if [ "$ram_total" -eq 0 ]; then echo "N/A"; return; fi
+    local ram_used=0 ram_total=0
+    if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+        # macOS: общий объем из sysctl, использование из vm_stat
+        local total_bytes; total_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+        ram_total=$(( total_bytes / 1024 / 1024 ))
+        local page_size; page_size=$(vm_stat 2>/dev/null | awk '/page size of/{print $8}')
+        [[ -z "$page_size" ]] && page_size=4096
+        local pages_active; pages_active=$(vm_stat 2>/dev/null | awk '/Pages active/{gsub(/\./,""); print $3}')
+        local pages_wired; pages_wired=$(vm_stat 2>/dev/null | awk '/Pages wired down/{gsub(/\./,""); print $4}')
+        local pages_compressed; pages_compressed=$(vm_stat 2>/dev/null | awk '/Pages occupied by compressor/{gsub(/\./,""); print $5}')
+        [[ -z "$pages_active" ]] && pages_active=0
+        [[ -z "$pages_wired" ]] && pages_wired=0
+        [[ -z "$pages_compressed" ]] && pages_compressed=0
+        local used_bytes=$(( (pages_active + pages_wired + pages_compressed) * page_size ))
+        ram_used=$(( used_bytes / 1024 / 1024 ))
+    else
+        local ram_info; ram_info=$(free -m | grep Mem)
+        ram_used=$(echo "$ram_info" | awk '{print $3}')
+        ram_total=$(echo "$ram_info" | awk '{print $2}')
+    fi
+    if [[ -z "$ram_total" || "$ram_total" -eq 0 ]]; then echo "N/A"; return; fi
     local perc=$(( 100 * ram_used / ram_total ))
     local bar; bar=$(_draw_bar "$perc")
     local used_str; local total_str
@@ -155,17 +220,26 @@ _get_ram_visual() {
 }
 
 _get_disk_visual() {
-    local main_disk; main_disk=$(df / | awk 'NR==2 {print $1}' | sed 's|/dev/||' | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//')
-    local disk_type="HDD"
-    if [ -f "/sys/block/$main_disk/queue/rotational" ] && [ "$(cat "/sys/block/$main_disk/queue/rotational")" -eq 0 ]; then
-        disk_type="SSD"; elif [[ "$main_disk" == *"nvme"* ]]; then disk_type="SSD"; fi
+    local disk_type="SSD"
+    if [[ "$_RESHALA_OS" != "Darwin" ]]; then
+        local main_disk; main_disk=$(df / | awk 'NR==2 {print $1}' | sed 's|/dev/||' | sed 's/[0-9]*$//' | sed 's/p[0-9]*$//')
+        disk_type="HDD"
+        if [ -f "/sys/block/$main_disk/queue/rotational" ] && [ "$(cat "/sys/block/$main_disk/queue/rotational")" -eq 0 ]; then
+            disk_type="SSD"; elif [[ "$main_disk" == *"nvme"* ]]; then disk_type="SSD"; fi
+    fi
     local usage_stats; usage_stats=$(df -h / | awk 'NR==2 {print $3 "/" $2}')
     local perc_str; perc_str=$(df / | awk 'NR==2 {print $5}' | tr -d '%')
+    [[ -z "$perc_str" ]] && perc_str=0
     local bar; bar=$(_draw_bar "$perc_str")
     echo "$disk_type|$bar ($usage_stats)"
 }
 
 _get_port_speed() {
+    if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+        # На macOS нет ip route / /sys/class/net — не показываем скорость порта
+        return
+    fi
+
     local iface; iface=$(ip route | grep default | head -n1 | awk '{print $5}')
     local speed=""
 
@@ -462,7 +536,12 @@ show() {
                         widget_output=$(cat "$cache_file" 2>/dev/null || true)
 
                         # Если кеш протух и в фоне ещё не идёт пересборка — запустим её асинхронно
-                        local mtime; mtime=$(stat -c %Y "$cache_file" 2>/dev/null || echo 0)
+                        local mtime
+                        if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+                            mtime=$(stat -f %m "$cache_file" 2>/dev/null || echo 0)
+                        else
+                            mtime=$(stat -c %Y "$cache_file" 2>/dev/null || echo 0)
+                        fi
                         if (( now_ts - mtime >= DASHBOARD_WIDGET_CACHE_TTL_ADJ )) && [ ! -f "$building_flag" ]; then
                             (
                                 touch "$building_flag" 2>/dev/null || true

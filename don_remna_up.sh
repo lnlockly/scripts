@@ -4,7 +4,7 @@ cat > /root/don_remna_up.sh << 'ENDOFFILE'
 # ==========================================
 #  DON MATTEO SYSTEM UPGRADER
 #  Code: LETHAL | Style: GANGSTA | Status: GOD MODE
-#  Edition: RETURN OF THE LEGEND (v1.7)
+#  Edition: RETURN OF THE LEGEND (v1.8)
 # ==========================================
 
 # Цветовая палитра
@@ -16,12 +16,42 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
+# Кроссплатформенный readlink -f (macOS не поддерживает -f нативно)
+_portable_readlink_f() {
+    local target="$1"
+    if command -v greadlink &>/dev/null; then
+        greadlink -f "$target"
+    elif readlink -f "$target" &>/dev/null; then
+        readlink -f "$target"
+    elif command -v python3 &>/dev/null; then
+        python3 -c "import os; print(os.path.realpath('$target'))"
+    else
+        # Ручной обход симлинков
+        local current="$target"
+        while [ -L "$current" ]; do
+            local dir; dir=$(cd -P "$(dirname "$current")" && pwd)
+            current=$(readlink "$current")
+            [[ "$current" != /* ]] && current="$dir/$current"
+        done
+        cd -P "$(dirname "$current")" && printf '%s/%s\n' "$(pwd)" "$(basename "$current")"
+    fi
+}
+
 # ==================================================================================
 # 🕵️  ИЩЕЙКА (AUTO-DISCOVERY ZONE)  🕵️
 # ==================================================================================
 # Сюда не лезь. Скрипт сам найдет, куда ты спрятал файлы.
 
 echo -e "${BLUE}🔍 Начинаю шмон по системе... Ищем твои контейнеры...${NC}"
+
+# Определяем директории для поиска (macOS: $HOME, Linux: /opt /root)
+_SEARCH_DIRS=()
+[ -d "/opt" ] && _SEARCH_DIRS+=("/opt")
+[ -d "/root" ] && _SEARCH_DIRS+=("/root")
+# На macOS /root может не существовать, ищем в $HOME
+if [ -d "$HOME" ] && [ "$HOME" != "/root" ]; then
+    _SEARCH_DIRS+=("$HOME")
+fi
 
 # Функция поиска docker-compose
 find_core_path() {
@@ -30,11 +60,16 @@ find_core_path() {
         echo "/opt/remnawave"
         return
     fi
-    
-    # 2. Если ты "творческая личность", ищем в /opt и /root (глубина 4)
+
+    # 2. Если ты "творческая личность", ищем в известных директориях (глубина 4)
     # Ищем файл, в котором упоминается образ remnawave (node или backend)
-    local FOUND=$(find /opt /root -maxdepth 4 -name "docker-compose.y*ml" -print0 2>/dev/null | xargs -0 grep -lE "image:.*remnawave/(node|backend)" | head -n 1)
-    
+    if [ ${#_SEARCH_DIRS[@]} -eq 0 ]; then
+        echo "NOT_FOUND"
+        return
+    fi
+    local FOUND
+    FOUND=$(find "${_SEARCH_DIRS[@]}" -maxdepth 4 -name "docker-compose.y*ml" -print0 2>/dev/null | xargs -0 grep -lE "image:.*remnawave/(node|backend)" 2>/dev/null | head -n 1)
+
     if [ -n "$FOUND" ]; then
         dirname "$FOUND"
     else
@@ -73,9 +108,9 @@ SERVICES=(
 
 # ========== БЛОК: Я ТУТ ТЕПЕРЬ ЖИВУ (AUTO-INSTALL v2) ==========
 # Этот блок гарантирует, что donup всегда ссылается на этот самый файл
-REAL_PATH=$(readlink -f "$0")
+REAL_PATH=$(_portable_readlink_f "$0")
 LINK_PATH="/usr/local/bin/donup"
-CURRENT_LINK_TARGET=$(readlink -f "$LINK_PATH" 2>/dev/null)
+CURRENT_LINK_TARGET=$(_portable_readlink_f "$LINK_PATH" 2>/dev/null)
 
 # Если скрипт запущен НЕ через команду donup (или ссылка кривая), мы обновляем ссылку
 if [ "$REAL_PATH" != "$LINK_PATH" ]; then
@@ -214,7 +249,7 @@ confirm_execution() {
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${CYAN}💡 НЕ ВИДИШЬ СВОЮ ПАПКУ? РАЗУЙ ГЛАЗА!${NC}"
     echo -e "   Зайди в файл и поправь пути:"
-    echo -e "   ${YELLOW}nano $(readlink -f "$0")${NC}" 
+    echo -e "   ${YELLOW}nano $(_portable_readlink_f "$0")${NC}"
     echo -e "   Секция ${MAGENTA}CONFIG ZONE${NC} вверху. Я ждал, пока ты спросишь."
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
@@ -270,10 +305,11 @@ for dir in "${SERVICES[@]}"; do
     if [ -d "$dir" ]; then
         print_action "💤" "Вырубаем всё в" "$dir"
         (cd "$dir" && docker compose down) &>/dev/null
-        if [ $? -eq 0 ]; then 
+        RES=$?
+        if [ $RES -eq 0 ]; then
             print_success
-        else 
-            print_error $? "$dir"
+        else
+            print_error $RES "$dir"
         fi
     fi
 done
@@ -289,10 +325,11 @@ for dir in "${SERVICES[@]}"; do
     if [ -d "$dir" ]; then
         print_action "📥" "Засасываем свежак в" "$dir"
         (cd "$dir" && docker compose pull) &>/dev/null
-        if [ $? -eq 0 ]; then 
+        RES=$?
+        if [ $RES -eq 0 ]; then
             print_success
-        else 
-            print_error $? "$dir"
+        else
+            print_error $RES "$dir"
         fi
     fi
 done

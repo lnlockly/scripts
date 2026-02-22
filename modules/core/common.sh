@@ -13,6 +13,44 @@ if [ -f "${SCRIPT_DIR}/modules/core/dependencies.sh" ]; then
     source "${SCRIPT_DIR}/modules/core/dependencies.sh"
 fi
 
+# --- Кроссплатформенные хелперы (macOS / Linux) ---
+
+# Определяем ОС один раз
+_RESHALA_OS="$(uname -s)"
+
+# Кроссплатформенный sed -i (macOS BSD sed требует '' после -i)
+portable_sed_i() {
+    if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+        sed -i '' "$@"
+    else
+        sed -i "$@"
+    fi
+}
+
+# Кроссплатформенный readlink -f (macOS не поддерживает -f)
+portable_readlink_f() {
+    local target="$1"
+    if [[ "$_RESHALA_OS" == "Darwin" ]]; then
+        # Используем Python если есть, иначе ручной обход
+        if command -v python3 &>/dev/null; then
+            python3 -c "import os; print(os.path.realpath('$target'))"
+        elif command -v perl &>/dev/null; then
+            perl -e "use Cwd 'abs_path'; print abs_path('$target')"
+        else
+            # Ручной обход: разрешаем симлинки вручную
+            local current="$target"
+            while [ -L "$current" ]; do
+                local dir=$(cd -P "$(dirname "$current")" && pwd)
+                current=$(readlink "$current")
+                [[ "$current" != /* ]] && current="$dir/$current"
+            done
+            cd -P "$(dirname "$current")" && printf '%s/%s\n' "$(pwd)" "$(basename "$current")"
+        fi
+    else
+        readlink -f "$target"
+    fi
+}
+
 # --- Цвета для вывода в терминал ---
 C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m';
 C_YELLOW='\033[1;33m'; C_CYAN='\033[0;36m'; C_BLUE='\033[0;94m'; C_BOLD='\033[1m';
@@ -398,7 +436,7 @@ set_config_var() {
     local value="$2"
     local config_file="${SCRIPT_DIR}/config/reshala.conf"
     if grep -q "^${key}=" "$config_file" 2>/dev/null; then
-        sed -i "s|^${key}=.*|${key}=\"${value}\"|" "$config_file"
+        portable_sed_i "s|^${key}=.*|${key}=\"${value}\"|" "$config_file"
     else
         echo "${key}=\"${value}\"" >> "$config_file"
     fi

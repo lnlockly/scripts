@@ -76,7 +76,7 @@ _sanitize_fleet_database() {
         fi
 
         # Original cleanup logic (remove empty lines and invalid entries)
-        sed -i '/^$/d' "$FLEET_DATABASE_FILE"
+        portable_sed_i '/^$/d' "$FLEET_DATABASE_FILE"
 
         local tmp_filter=$(mktemp)
         while IFS='|' read -r name user ip port key_path sudo_pass; do

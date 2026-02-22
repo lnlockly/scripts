@@ -16,7 +16,10 @@ source "${SCRIPT_DIR}/modules/skynet/db.sh"
 # ВАЖНО: ВСЁ, что идёт в stdout, должно быть ТОЛЬКО путём до ключа,
 # чтобы можно было безопасно писать $( _ensure_master_key ).
 _ensure_master_key() {
-if [[ ! -f "$key_path" ]]; then
+    local key_path="${HOME}/.ssh/${SKYNET_MASTER_KEY_NAME}"
+    # Убеждаемся, что директория .ssh существует
+    mkdir -p "${HOME}/.ssh" && chmod 700 "${HOME}/.ssh"
+    if [[ ! -f "$key_path" ]]; then
         printf_info "🔑 Генерирую МАСТЕР-КЛЮЧ (${SKYNET_MASTER_KEY_NAME})..." >&2
         ssh-keygen -t ed25519 -f "$key_path" -N "" -q
     fi
