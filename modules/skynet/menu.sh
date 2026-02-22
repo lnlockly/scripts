@@ -344,6 +344,14 @@ _show_server_management_menu() {
         stty sane
         info "🔙 Связь с ${s_name} завершена."
     }
+    _sm_ssh_terminal() {
+        _skynet_heal_host_key "$s_ip" "$s_port"
+        clear
+        printf_info "💻 SSH: ${s_user}@${s_ip}:${s_port}"
+        ssh -t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port" "${s_user}@${s_ip}"
+        stty sane
+        info "🔙 SSH с ${s_name} завершён."
+    }
     _sm_security() { _show_server_security_menu "$server_idx" "$server_data"; }
     _sm_edit() {
         info "Редактирование: ${s_name}"; local n; n=$(safe_read "Имя" "$s_name")||return; local u; u=$(safe_read "Пользователь" "$s_user")||return; local i; i=$(safe_read "IP" "$s_ip")||return; local p; p=$(safe_read "Порт" "$s_port")||return; local k; k=$(safe_read "Ключ" "$s_key")||return
@@ -367,21 +375,23 @@ _show_server_management_menu() {
         
         # --- Ручная отрисовка меню ---
         echo ""
-        printf_menu_option "1" "🚀 Подключиться к терминалу"
-        printf_menu_option "2" "🛡️ Управление безопасностью"
-        printf_menu_option "3" "📝 Редактировать запись"
-        printf_menu_option "4" "🗑️ Удалить сервер"
+        printf_menu_option "1" "🚀 Подключиться к терминалу (Решала)"
+        printf_menu_option "2" "💻 SSH терминал (чистый)"
+        printf_menu_option "3" "🛡️ Управление безопасностью"
+        printf_menu_option "4" "📝 Редактировать запись"
+        printf_menu_option "5" "🗑️ Удалить сервер"
         echo ""
         printf_menu_option "b" "Назад"
         echo ""
 
         local choice; choice=$(safe_read "Действие") || break
-        
+
         case "$choice" in
             1) _sm_connect ;;
-            2) _sm_security ;;
-            3) _sm_edit ;;
-            4) _sm_delete && break ;; # Если удалили, выходим из меню
+            2) _sm_ssh_terminal ;;
+            3) _sm_security ;;
+            4) _sm_edit ;;
+            5) _sm_delete && break ;; # Если удалили, выходим из меню
             b|B) break ;;
             *) warn "Неверный выбор" ;;
         esac
