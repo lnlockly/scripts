@@ -54,9 +54,6 @@ _skynet_add_server_wizard() {
     local s_user; s_user=$(safe_read "Пользователь: " "$SKYNET_DEFAULT_USER")
     local s_port; s_port=$(safe_read "SSH порт: " "$SKYNET_DEFAULT_PORT")
     local s_pass=""
-    if [[ "$s_user" != "root" ]]; then
-        s_pass=$(ask_password "Пароль sudo (или Enter): ")
-    fi
 
     echo
     printf_info "Выбери SSH ключ для этого сервера:"
@@ -165,12 +162,8 @@ _skynet_add_server_wizard() {
                     ssh -t -o StrictHostKeyChecking=no -i "$final_key" -p "$s_port" "${s_user}@${s_ip}" "$harden_cmd"
                     stty sane
                 else
-                    if [[ -n "$s_pass" ]]; then
-                        ssh -t -o StrictHostKeyChecking=no -i "$final_key" -p "$s_port" "${s_user}@${s_ip}" "echo '$s_pass' | sudo -S -p '' bash -c '$harden_cmd'"
-                        stty sane
-                    else
-                        printf_warning "Пароль sudo не указан."
-                    fi
+                    ssh -t -o StrictHostKeyChecking=no -i "$final_key" -p "$s_port" "${s_user}@${s_ip}" "sudo bash -c '${harden_cmd}'"
+                    stty sane
                 fi
             fi
         fi
@@ -258,8 +251,7 @@ show_fleet_menu() {
                     "...") status_color="${C_CYAN}" ;;
                 esac
                 local kp_display="Master"; [[ "$key_path" == *"$SKYNET_UNIQUE_KEY_PREFIX"* ]] && kp_display="Unique"
-                local pass_icon=""; if [[ "$user" != "root" && -n "$sudo_pass" ]]; then pass_icon="🔑"; fi
-                printf "   [%d] [%b%s%b] %b%-15s%b -> %s@%s:%s [%s] %s\n" "$i" "$status_color" "$status_text" "${C_RESET}" "${C_WHITE}" "$name" "${C_RESET}" "$user" "$ip" "$port" "$kp_display" "$pass_icon"
+                printf "   [%d] [%b%s%b] %b%-15s%b -> %s@%s:%s [%s]\n" "$i" "$status_color" "$status_text" "${C_RESET}" "${C_WHITE}" "$name" "${C_RESET}" "$user" "$ip" "$port" "$kp_display"
                 ((i++))
             done
         fi
@@ -314,21 +306,12 @@ _show_server_management_menu() {
             fi
         fi
 
-        if [[ "$s_user" != "root" && -z "$s_pass" ]]; then
-            s_pass=$(ask_password "Введи пароль для '$s_user': ")
-            if [[ -n "$s_pass" ]] && ask_yes_no "Сохранить пароль в базу?" "n"; then
-                server_data="$s_name|$s_user|$s_ip|$s_port|$s_key|$s_pass"
-                _update_fleet_record "$server_idx" "$server_data"
-                ok "Пароль сохранён."
-            fi
-        fi
-
         run_remote() {
             local cmd_to_run="$1"
             if [[ "$s_user" == "root" ]]; then
                 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$s_key" -p "$s_port" "$s_user@$s_ip" "$cmd_to_run"
             else
-                ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$s_key" -p "$s_port" "$s_user@$s_ip" "echo '$s_pass' | sudo -S -p '' bash -c '$cmd_to_run'"
+                ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$s_key" -p "$s_port" "$s_user@$s_ip" "sudo bash -c '$cmd_to_run'"
             fi
         }
 
@@ -349,14 +332,13 @@ _show_server_management_menu() {
         printf_info "Вхожу в удалённый терминал..."
         local ssh_opts=(-t -o StrictHostKeyChecking=no -i "$s_key" -p "$s_port")
         local remote_target="${s_user}@${s_ip}"
-        # Исполняем команду через 'bash -l -c' и по абсолютному пути, чтобы гарантировать корректный $PATH
-        local remote_exec_command="bash -l -c 'SKYNET_MODE=1 /opt/reshala/reshala.sh'"
+        # Исполняем команду через bash -l -c и по абсолютному пути, чтобы гарантировать корректный $PATH
+        local remote_exec_command='bash -l -c "SKYNET_MODE=1 /opt/reshala/reshala.sh"'
 
         if [[ "$s_user" == "root" ]]; then
             ssh "${ssh_opts[@]}" "$remote_target" "$remote_exec_command"
         else
-            local sudo_wrapper_command="echo '$s_pass' | sudo -S -p '' ${remote_exec_command}"
-            ssh "${ssh_opts[@]}" "$remote_target" "$sudo_wrapper_command"
+            ssh "${ssh_opts[@]}" "$remote_target" "sudo ${remote_exec_command}"
         fi
         
         stty sane
@@ -364,8 +346,8 @@ _show_server_management_menu() {
     }
     _sm_security() { _show_server_security_menu "$server_idx" "$server_data"; }
     _sm_edit() {
-        info "Редактирование: ${s_name}"; local n; n=$(safe_read "Имя" "$s_name")||return; local u; u=$(safe_read "Пользователь" "$s_user")||return; local i; i=$(safe_read "IP" "$s_ip")||return; local p; p=$(safe_read "Порт" "$s_port")||return; local k; k=$(safe_read "Ключ" "$s_key")||return; local pw; pw=$(ask_password "Пароль sudo (Enter, чтобы оставить):"); if [[ -z "$pw" ]]; then pw=$s_pass; fi
-        server_data="${n}|${u}|${i}|${p}|${k}|${pw}"; _update_fleet_record "$server_idx" "$server_data"; s_name=$n; s_user=$u; s_ip=$i; s_port=$p; s_key=$k; s_pass=$pw; ok "Запись обновлена."; wait_for_enter
+        info "Редактирование: ${s_name}"; local n; n=$(safe_read "Имя" "$s_name")||return; local u; u=$(safe_read "Пользователь" "$s_user")||return; local i; i=$(safe_read "IP" "$s_ip")||return; local p; p=$(safe_read "Порт" "$s_port")||return; local k; k=$(safe_read "Ключ" "$s_key")||return
+        server_data="${n}|${u}|${i}|${p}|${k}|"; _update_fleet_record "$server_idx" "$server_data"; s_name=$n; s_user=$u; s_ip=$i; s_port=$p; s_key=$k; ok "Запись обновлена."; wait_for_enter
     }
     _sm_delete() { 
         if ask_yes_no "Удалить сервер '${s_name}'?" "n"; then 
