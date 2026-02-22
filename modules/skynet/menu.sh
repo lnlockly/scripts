@@ -99,7 +99,14 @@ _skynet_add_server_wizard() {
                     custom_key_path="${HOME}/.ssh/reshala_pasted_key_$(date +%s)"
                     printf "%b" "$pasted_key" > "$custom_key_path"
                     chmod 600 "$custom_key_path"
-                    printf_ok "Ключ сохранен в: $custom_key_path"
+                    # Проверяем что вставленное — валидный приватный ключ
+                    if ! ssh-keygen -y -f "$custom_key_path" &>/dev/null; then
+                        printf_error "Вставленные данные — не валидный SSH ключ."
+                        rm -f "$custom_key_path"
+                        custom_key_path=""
+                    else
+                        printf_ok "Ключ сохранен в: $custom_key_path"
+                    fi
                 fi
             fi
 
