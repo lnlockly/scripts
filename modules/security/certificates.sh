@@ -342,18 +342,18 @@ _cert_copy_to_fleet() {
         # Лечим host key если функция доступна (загружена из skynet/keys.sh)
         type _skynet_heal_host_key &>/dev/null && _skynet_heal_host_key "$ip" "$port"
 
-        # Копируем архив
-        if ! scp -q -P "$port" -i "$key_path" -o StrictHostKeyChecking=no "$tmp_archive" "${user}@${ip}:/tmp/reshala_certs.tar.gz"; then
+        # Копируем архив (-o BatchMode=yes чтобы не жрал stdin)
+        if ! scp -q -P "$port" -i "$key_path" -o StrictHostKeyChecking=no -o BatchMode=yes "$tmp_archive" "${user}@${ip}:/tmp/reshala_certs.tar.gz"; then
             printf_error "Не удалось скопировать на ${name}."
             return 1
         fi
 
-        # Распаковываем на сервере
+        # Распаковываем на сервере. -n чтобы ssh не съедал stdin цикла while read
         local unpack_cmd="mkdir -p ${remote_cert_dir} && tar -xzf /tmp/reshala_certs.tar.gz -C ${remote_cert_dir} && chmod 600 ${remote_cert_dir}/privkey.pem && rm -f /tmp/reshala_certs.tar.gz"
         if [[ "$user" == "root" ]]; then
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$key_path" -p "$port" "${user}@${ip}" "$unpack_cmd"
+            ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$key_path" -p "$port" "${user}@${ip}" "$unpack_cmd"
         else
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$key_path" -p "$port" "${user}@${ip}" "sudo bash -c '${unpack_cmd}'"
+            ssh -n -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$key_path" -p "$port" "${user}@${ip}" "sudo bash -c '${unpack_cmd}'"
         fi
 
         if [[ $? -eq 0 ]]; then
