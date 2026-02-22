@@ -25,6 +25,7 @@ show_certificates_menu() {
         printf_menu_option "3" "Обновить все сертификаты (certbot renew)"
         printf_menu_option "4" "Скопировать сертификаты на сервер(а) флота"
         printf_menu_option "5" "Показать все сертификаты"
+        printf_menu_option "6" "Управление DNS записями (Cloudflare)"
         echo ""
         printf_menu_option "b" "Назад"
         echo ""
@@ -38,6 +39,7 @@ show_certificates_menu() {
             3) _cert_renew_all; wait_for_enter ;;
             4) _cert_copy_to_fleet; wait_for_enter ;;
             5) _cert_list_all; wait_for_enter ;;
+            6) _dns_manage_menu ;;
             b|B) break ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -409,4 +411,369 @@ _cert_list_all() {
     fi
 
     certbot certificates 2>/dev/null || printf_warning "Нет сертификатов."
+}
+
+# ============================================================
+#  DNS MANAGEMENT (Cloudflare API)
+# ============================================================
+
+# Загрузить CF credentials из файла certbot
+_dns_load_cf_creds() {
+    CF_KEY="" ; CF_EMAIL=""
+    if [[ ! -f "$CERT_CF_CREDENTIALS" ]]; then
+        return 1
+    fi
+    # Пробуем token
+    CF_KEY=$(grep -oP '(?<=dns_cloudflare_api_token\s=\s).*' "$CERT_CF_CREDENTIALS" 2>/dev/null | tr -d ' ')
+    if [[ -z "$CF_KEY" ]]; then
+        CF_KEY=$(grep -oP '(?<=dns_cloudflare_api_key\s=\s).*' "$CERT_CF_CREDENTIALS" 2>/dev/null | tr -d ' ')
+        CF_EMAIL=$(grep -oP '(?<=dns_cloudflare_email\s=\s).*' "$CERT_CF_CREDENTIALS" 2>/dev/null | tr -d ' ')
+    fi
+    [[ -n "$CF_KEY" ]]
+}
+
+# Универсальный curl к Cloudflare API
+_dns_cf_api() {
+    local method="$1" endpoint="$2" data="${3:-}"
+    local -a headers=( --header "Content-Type: application/json" )
+
+    if [[ "$CF_KEY" =~ [A-Z] ]]; then
+        headers+=( --header "Authorization: Bearer ${CF_KEY}" )
+    else
+        headers+=( --header "X-Auth-Key: ${CF_KEY}" --header "X-Auth-Email: ${CF_EMAIL}" )
+    fi
+
+    if [[ -n "$data" ]]; then
+        curl --silent --request "$method" --url "https://api.cloudflare.com/client/v4${endpoint}" "${headers[@]}" --data "$data"
+    else
+        curl --silent --request "$method" --url "https://api.cloudflare.com/client/v4${endpoint}" "${headers[@]}"
+    fi
+}
+
+# Получить zone_id по домену
+_dns_get_zone_id() {
+    local domain="$1"
+    local resp
+    resp=$(_dns_cf_api GET "/zones?name=${domain}&status=active")
+    echo "$resp" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4
+}
+
+# Подменю DNS
+_dns_manage_menu() {
+    # Загружаем credentials
+    if ! _dns_load_cf_creds; then
+        printf_error "Cloudflare credentials не найдены. Сначала получи сертификат (пункт 1) или введи данные вручную."
+        local cf_key cf_email
+        cf_key=$(ask_non_empty "Cloudflare API Token или Global API Key: ") || return
+        cf_email=$(safe_read "Cloudflare Email (для Global Key, Enter чтобы пропустить): " "")
+        _cert_validate_cloudflare "$cf_key" "$cf_email" || return
+        _cert_save_cloudflare_credentials "$cf_key" "$cf_email"
+        _dns_load_cf_creds || { printf_error "Не удалось загрузить credentials."; return; }
+    fi
+
+    while true; do
+        clear
+        menu_header "🌐 DNS записи (Cloudflare)"
+        printf_description "Добавление и просмотр DNS A-записей."
+        echo ""
+        printf_menu_option "1" "Добавить A-запись"
+        printf_menu_option "2" "Показать A-записи домена"
+        printf_menu_option "3" "Удалить A-запись"
+        printf_menu_option "4" "Массово добавить IP из флота"
+        echo ""
+        printf_menu_option "b" "Назад"
+        echo ""
+
+        local choice
+        choice=$(safe_read "Выберите действие" "") || break
+        case "$choice" in
+            1) _dns_add_a_record; wait_for_enter ;;
+            2) _dns_list_a_records; wait_for_enter ;;
+            3) _dns_delete_a_record; wait_for_enter ;;
+            4) _dns_add_fleet_ips; wait_for_enter ;;
+            b|B) break ;;
+            *) warn "Неверный выбор" ;;
+        esac
+    done
+}
+
+# --- 1. Добавить A-запись ---
+_dns_add_a_record() {
+    print_separator
+    printf_info "Добавление DNS A-записи"
+    print_separator
+
+    local domain
+    domain=$(ask_non_empty "Базовый домен (например, example.com): ") || return
+
+    local zone_id
+    zone_id=$(_dns_get_zone_id "$domain")
+    if [[ -z "$zone_id" ]]; then
+        printf_error "Зона для '${domain}' не найдена в Cloudflare."
+        return
+    fi
+    printf_ok "Зона найдена: ${domain} (${zone_id})"
+
+    local subdomain
+    subdomain=$(safe_read "Поддомен (Enter = корень ${domain}): " "")
+
+    local full_name
+    if [[ -n "$subdomain" ]]; then
+        full_name="${subdomain}.${domain}"
+    else
+        full_name="${domain}"
+    fi
+
+    local ip
+    ip=$(ask_non_empty "IP адрес: ") || return
+
+    local proxied="false"
+    if ask_yes_no "Проксировать через Cloudflare (оранжевое облако)?" "n"; then
+        proxied="true"
+    fi
+
+    printf_info "Создаю A-запись: ${full_name} -> ${ip} (proxy: ${proxied})..."
+
+    local resp
+    resp=$(_dns_cf_api POST "/zones/${zone_id}/dns_records" \
+        "{\"type\":\"A\",\"name\":\"${full_name}\",\"content\":\"${ip}\",\"ttl\":1,\"proxied\":${proxied}}")
+
+    if echo "$resp" | grep -q '"success":true'; then
+        printf_ok "A-запись создана: ${full_name} -> ${ip}"
+    else
+        local err_msg
+        err_msg=$(echo "$resp" | grep -o '"message":"[^"]*"' | head -1 | cut -d'"' -f4)
+        printf_error "Ошибка: ${err_msg:-неизвестная ошибка}"
+    fi
+}
+
+# --- 2. Показать A-записи ---
+_dns_list_a_records() {
+    print_separator
+    printf_info "Просмотр A-записей"
+    print_separator
+
+    local domain
+    domain=$(ask_non_empty "Базовый домен (например, example.com): ") || return
+
+    local zone_id
+    zone_id=$(_dns_get_zone_id "$domain")
+    if [[ -z "$zone_id" ]]; then
+        printf_error "Зона для '${domain}' не найдена."
+        return
+    fi
+
+    local resp
+    resp=$(_dns_cf_api GET "/zones/${zone_id}/dns_records?type=A&per_page=100")
+
+    if ! echo "$resp" | grep -q '"success":true'; then
+        printf_error "Не удалось получить записи."
+        return
+    fi
+
+    local count
+    count=$(echo "$resp" | grep -o '"type":"A"' | wc -l | tr -d ' ')
+    printf_ok "Найдено A-записей: ${count}"
+    echo ""
+
+    # Парсим и выводим
+    echo "$resp" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for r in data.get('result', []):
+    proxy = '☁️ ' if r.get('proxied') else '  '
+    print(f'  {proxy} {r[\"name\"]:40s} -> {r[\"content\"]:16s}  (id: {r[\"id\"][:8]}...)')
+" 2>/dev/null || {
+        # Фоллбек без python
+        echo "$resp" | grep -oP '"name":"[^"]*"|"content":"[^"]*"|"proxied":(true|false)' | paste - - - | while read -r line; do
+            local name content proxied_val
+            name=$(echo "$line" | grep -oP '"name":"[^"]*"' | cut -d'"' -f4)
+            content=$(echo "$line" | grep -oP '"content":"[^"]*"' | cut -d'"' -f4)
+            proxied_val=$(echo "$line" | grep -oP '"proxied":\w+' | cut -d: -f2)
+            local icon="  "; [[ "$proxied_val" == "true" ]] && icon="☁️ "
+            printf "  %s %-40s -> %s\n" "$icon" "$name" "$content"
+        done
+    }
+}
+
+# --- 3. Удалить A-запись ---
+_dns_delete_a_record() {
+    print_separator
+    printf_info "Удаление DNS A-записи"
+    print_separator
+
+    local domain
+    domain=$(ask_non_empty "Базовый домен (например, example.com): ") || return
+
+    local zone_id
+    zone_id=$(_dns_get_zone_id "$domain")
+    if [[ -z "$zone_id" ]]; then
+        printf_error "Зона для '${domain}' не найдена."
+        return
+    fi
+
+    local resp
+    resp=$(_dns_cf_api GET "/zones/${zone_id}/dns_records?type=A&per_page=100")
+
+    # Собираем записи в массив
+    local ids=() names=() ips=()
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local rid rname rip
+        rid=$(echo "$line" | cut -d'|' -f1)
+        rname=$(echo "$line" | cut -d'|' -f2)
+        rip=$(echo "$line" | cut -d'|' -f3)
+        ids+=("$rid"); names+=("$rname"); ips+=("$rip")
+    done < <(echo "$resp" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for r in data.get('result', []):
+    print(f'{r[\"id\"]}|{r[\"name\"]}|{r[\"content\"]}')
+" 2>/dev/null)
+
+    if [[ ${#ids[@]} -eq 0 ]]; then
+        printf_warning "Нет A-записей для удаления."
+        return
+    fi
+
+    echo ""
+    for i in "${!ids[@]}"; do
+        printf_menu_option "$((i+1))" "${names[$i]} -> ${ips[$i]}"
+    done
+    echo ""
+
+    local del_choice
+    del_choice=$(safe_read "Номер записи для удаления: " "") || return
+
+    if [[ -z "$del_choice" || "$del_choice" -lt 1 || "$del_choice" -gt ${#ids[@]} ]] 2>/dev/null; then
+        printf_error "Неверный выбор."
+        return
+    fi
+
+    local target_id="${ids[$((del_choice-1))]}"
+    local target_name="${names[$((del_choice-1))]}"
+    local target_ip="${ips[$((del_choice-1))]}"
+
+    if ! ask_yes_no "Удалить ${target_name} -> ${target_ip}?"; then
+        info "Отмена."
+        return
+    fi
+
+    local del_resp
+    del_resp=$(_dns_cf_api DELETE "/zones/${zone_id}/dns_records/${target_id}")
+    if echo "$del_resp" | grep -q '"success":true'; then
+        printf_ok "Запись удалена: ${target_name} -> ${target_ip}"
+    else
+        printf_error "Не удалось удалить запись."
+    fi
+}
+
+# --- 4. Массово добавить IP серверов из флота ---
+_dns_add_fleet_ips() {
+    print_separator
+    printf_info "Массовое добавление IP серверов флота"
+    print_separator
+
+    if [[ ! -s "$FLEET_DATABASE_FILE" ]]; then
+        printf_error "База флота пуста."
+        return
+    fi
+
+    local domain
+    domain=$(ask_non_empty "Базовый домен (например, example.com): ") || return
+
+    local zone_id
+    zone_id=$(_dns_get_zone_id "$domain")
+    if [[ -z "$zone_id" ]]; then
+        printf_error "Зона для '${domain}' не найдена в Cloudflare."
+        return
+    fi
+    printf_ok "Зона найдена: ${domain}"
+
+    local subdomain
+    subdomain=$(safe_read "Поддомен (Enter = корень ${domain}): " "")
+
+    local full_name
+    if [[ -n "$subdomain" ]]; then
+        full_name="${subdomain}.${domain}"
+    else
+        full_name="${domain}"
+    fi
+
+    local proxied="false"
+    if ask_yes_no "Проксировать через Cloudflare?" "n"; then
+        proxied="true"
+    fi
+
+    echo ""
+    printf_info "Серверы флота:"
+    local fleet_ips=() fleet_names=()
+    local idx=1
+    while IFS='|' read -r name user ip port key_path _rest; do
+        fleet_ips+=("$ip")
+        fleet_names+=("$name")
+        printf "   [%d] %s — %s\n" "$idx" "$name" "$ip"
+        ((idx++))
+    done < "$FLEET_DATABASE_FILE"
+
+    echo ""
+    local selection
+    selection=$(safe_read "Номера серверов через запятую (или 'all' для всех): " "all") || return
+
+    # Собираем выбранные индексы
+    local selected=()
+    if [[ "$selection" == "all" || "$selection" == "a" ]]; then
+        for i in "${!fleet_ips[@]}"; do selected+=("$i"); done
+    else
+        # Парсим "1,3,5" или "1, 3, 5" или "1-3,5"
+        IFS=',' read -ra parts <<< "$selection"
+        for part in "${parts[@]}"; do
+            part=$(echo "$part" | tr -d ' ')
+            if [[ "$part" == *-* ]]; then
+                local from="${part%-*}" to="${part#*-}"
+                for ((n=from; n<=to; n++)); do
+                    [[ -n "${fleet_ips[$((n-1))]:-}" ]] && selected+=("$((n-1))")
+                done
+            else
+                [[ -n "${fleet_ips[$((part-1))]:-}" ]] && selected+=("$((part-1))")
+            fi
+        done
+    fi
+
+    if [[ ${#selected[@]} -eq 0 ]]; then
+        printf_error "Ни один сервер не выбран."
+        return
+    fi
+
+    echo ""
+    printf_warning "Будет создано ${#selected[@]} A-записей: ${full_name}"
+    for i in "${selected[@]}"; do
+        printf "   • %s — %s\n" "${fleet_names[$i]}" "${fleet_ips[$i]}"
+    done
+    printf_info "Старые записи НЕ затираются — новые добавляются рядом."
+
+    if ! ask_yes_no "Добавить?"; then
+        info "Отмена."
+        return
+    fi
+
+    for i in "${selected[@]}"; do
+        local ip="${fleet_ips[$i]}"
+        local name="${fleet_names[$i]}"
+        printf_info "  ${name}: ${full_name} -> ${ip} ..."
+
+        local resp
+        resp=$(_dns_cf_api POST "/zones/${zone_id}/dns_records" \
+            "{\"type\":\"A\",\"name\":\"${full_name}\",\"content\":\"${ip}\",\"ttl\":1,\"proxied\":${proxied}}")
+
+        if echo "$resp" | grep -q '"success":true'; then
+            printf_ok "  Добавлено: ${ip}"
+        else
+            local err_msg
+            err_msg=$(echo "$resp" | grep -o '"message":"[^"]*"' | head -1 | cut -d'"' -f4)
+            printf_error "  Ошибка для ${ip}: ${err_msg:-неизвестно}"
+        fi
+    done
+
+    printf_ok "Готово!"
 }
