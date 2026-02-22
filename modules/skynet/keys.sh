@@ -16,12 +16,24 @@ source "${SCRIPT_DIR}/modules/skynet/db.sh"
 # ВАЖНО: ВСЁ, что идёт в stdout, должно быть ТОЛЬКО путём до ключа,
 # чтобы можно было безопасно писать $( _ensure_master_key ).
 _ensure_master_key() {
-    local key_path="${HOME}/.ssh/${SKYNET_MASTER_KEY_NAME}"
+    local _home="${HOME:-$(eval echo ~"$(whoami)")}"
+    [[ -z "$_home" ]] && _home="/root"
+    local ssh_dir="${_home}/.ssh"
+    local key_path="${ssh_dir}/${SKYNET_MASTER_KEY_NAME}"
+
+    if [[ -z "$key_path" || "$key_path" == "/.ssh/" ]]; then
+        printf_error "ОШИБКА: не удалось определить путь для ключа (HOME=${HOME:-пустой})." >&2
+        return 1
+    fi
+
     # Убеждаемся, что директория .ssh существует
-    mkdir -p "${HOME}/.ssh" && chmod 700 "${HOME}/.ssh"
+    mkdir -p "$ssh_dir" && chmod 700 "$ssh_dir"
     if [[ ! -f "$key_path" ]]; then
         printf_info "🔑 Генерирую МАСТЕР-КЛЮЧ (${SKYNET_MASTER_KEY_NAME})..." >&2
-        ssh-keygen -t ed25519 -f "$key_path" -N "" -q
+        if ! ssh-keygen -t ed25519 -f "$key_path" -N "" -q; then
+            printf_error "Не удалось создать ключ: $key_path" >&2
+            return 1
+        fi
     fi
     echo "$key_path"
 }
@@ -30,16 +42,23 @@ _ensure_master_key() {
 # Аналогично: stdout = только путь до ключа.
 _generate_unique_key() {
     local name="$1"
-    local ip="$2" # New argument
+    local ip="$2"
+    local _home="${HOME:-$(eval echo ~"$(whoami)")}"
+    [[ -z "$_home" ]] && _home="/root"
+    local ssh_dir="${_home}/.ssh"
     local safe_name_part; safe_name_part=$(echo "$name" | tr -cd '[:alnum:]_-')
-    local safe_ip_part; safe_ip_part=$(echo "$ip" | tr '.' '_') # Replace dots with underscores for filename safety
+    local safe_ip_part; safe_ip_part=$(echo "$ip" | tr '.' '_')
 
     local key_filename="${SKYNET_UNIQUE_KEY_PREFIX}${safe_name_part}_${safe_ip_part}"
-    local key_path="${HOME}/.ssh/${key_filename}"
+    local key_path="${ssh_dir}/${key_filename}"
 
+    mkdir -p "$ssh_dir" && chmod 700 "$ssh_dir"
     if [ ! -f "$key_path" ]; then
         printf_info "🔑 Генерирую УНИКАЛЬНЫЙ ключ для '${name}' (${ip})..." >&2
-        ssh-keygen -t ed25519 -f "$key_path" -N "" -q
+        if ! ssh-keygen -t ed25519 -f "$key_path" -N "" -q; then
+            printf_error "Не удалось создать ключ: $key_path" >&2
+            return 1
+        fi
     fi
     echo "$key_path"
 }
