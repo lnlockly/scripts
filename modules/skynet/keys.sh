@@ -21,8 +21,10 @@ _ensure_master_key() {
     local ssh_dir="${_home}/.ssh"
     local key_path="${ssh_dir}/${SKYNET_MASTER_KEY_NAME}"
 
-    if [[ -z "$key_path" || "$key_path" == "/.ssh/" ]]; then
-        printf_error "ОШИБКА: не удалось определить путь для ключа (HOME=${HOME:-пустой})." >&2
+    debug_log "KEYS: _home='${_home}' ssh_dir='${ssh_dir}' key_path='${key_path}' SKYNET_MASTER_KEY_NAME='${SKYNET_MASTER_KEY_NAME}'"
+
+    if [[ -z "$key_path" || "$key_path" == *"/.ssh/" ]]; then
+        printf_error "ОШИБКА: не удалось определить путь для ключа (HOME=${HOME:-пустой}, SKYNET_MASTER_KEY_NAME=${SKYNET_MASTER_KEY_NAME:-пустой})." >&2
         return 1
     fi
 
@@ -30,8 +32,11 @@ _ensure_master_key() {
     mkdir -p "$ssh_dir" && chmod 700 "$ssh_dir"
     if [[ ! -f "$key_path" ]]; then
         printf_info "🔑 Генерирую МАСТЕР-КЛЮЧ (${SKYNET_MASTER_KEY_NAME})..." >&2
-        if ! ssh-keygen -t ed25519 -f "$key_path" -N "" -q; then
-            printf_error "Не удалось создать ключ: $key_path" >&2
+        printf_info "DEBUG: key_path=[${key_path}] ssh_dir=[${ssh_dir}]" >&2
+        ssh-keygen -t ed25519 -f "${key_path}" -N '' -q 2>&1 >&2
+        local rc=$?
+        if [[ $rc -ne 0 ]]; then
+            printf_error "Не удалось создать ключ (rc=$rc): ${key_path}" >&2
             return 1
         fi
     fi
@@ -393,9 +398,10 @@ _show_keys_menu() {
 
         case "$choice" in
             [bB]) break ;;
-            [gG]) 
-                _ensure_master_key >/dev/null # Ensure it exists, ignore output
-                printf_ok "Мастер-ключ проверен/создан."
+            [gG])
+                if _ensure_master_key >/dev/null; then
+                    printf_ok "Мастер-ключ проверен/создан."
+                fi
                 sleep 1
                 ;;
             [iI]) _import_ssh_key ;;
